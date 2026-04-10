@@ -1,0 +1,105 @@
+1453735014537350
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Phone Camera — Face Attendance</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/phone_style.css">
+</head>
+
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="phone-header">
+            <div class="header-left">
+                <h1>Phone Camera</h1>
+                <span class="badge" id="status-badge">Connecting...</span>
+            </div>
+            <div class="header-right">
+                <span class="fps-counter" id="fps-display">0 FPS</span>
+            </div>
+        </header>
+
+        <!-- Camera viewfinder -->
+        <div class="viewfinder-container">
+            <video id="camera-video" autoplay playsinline muted></video>
+            <canvas id="capture-canvas" style="display:none"></canvas>
+
+            <!-- Face guide overlay -->
+            <div class="face-guide">
+                <svg viewBox="0 0 200 260" fill="none" stroke="rgba(79,140,255,0.5)" stroke-width="2">
+                    <rect x="10" y="10" width="180" height="240" rx="90" ry="120" />
+                </svg>
+            </div>
+
+            <!-- Status overlay -->
+            <div class="status-overlay" id="status-overlay" style="display:none">
+                <div class="status-icon">
+                    <div class="spinner-small"></div>
+                </div>
+                <p id="status-text">Connecting...</p>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button class="ctrl-btn" id="btn-switch" onclick="switchCamera()" title="Switch camera">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 16v4a2 2 0 01-2 2H6l4-4m-6-8V4a2 2 0 012-2h12l-4 4" />
+                    <circle cx="12" cy="12" r="3" />
+                </svg>
+                <span>Switch</span>
+            </button>
+            <button class="ctrl-btn ctrl-btn-primary" id="btn-connect" onclick="toggleConnection()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
+                </svg>
+                <span id="btn-connect-text">Start</span>
+            </button>
+            <div class="ctrl-group">
+                <label class="ctrl-label">FPS</label>
+                <select id="fps-select" onchange="setFps(this.value)">
+                    <option value="3">3</option>
+                    <option value="5" selected>5</option>
+                    <option value="10">10</option>
+                    <option value="15">15</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Stats bar -->
+        <div class="stats-bar">
+            <div class="stat">
+                <span class="stat-label">Status</span>
+                <span class="stat-value" id="conn-status">Not connected</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Frames sent</span>
+                <span class="stat-value" id="frame-count">0</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Quality</span>
+                <span class="stat-value" id="quality-info">70%</span>
+            </div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="instructions" id="instructions">
+            <h3>Instructions</h3>
+            <ol>
+                <li>Allow camera access when the browser requests it</li>
+                <li>Press <strong>"Start"</strong> to begin streaming to the server</li>
+                <li>Open the main dashboard and select <strong>"Phone"</strong> as camera source</li>
+                <li>Position your face in the frame and scan attendance</li>
+            </ol>
+        </div>
+    </div>
+
+    <script src="/static/phone.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,62 @@
+# Unrelated folders in project directory
+Computer Vision Share/
+
+# Pre-trained model files (too large for GitHub — download separately)
+models/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual envs
+.env
+.venv
+venv/
+env/
+
+# Database (local data — không commit)
+database/*.db
+database/*.db-shm
+database/*.db-wal
+
+# Logs & runtime artifacts
+logs/evidence/
+logs/face_crops/
+logs/*.log
+*.log
+
+# Tunnel
+tunnel_log*.txt
+
+# Models (nếu quá lớn — download riêng)
+# models/         # bỏ comment dòng này nếu model > 100MB
+
+# Web demo video (lớn, share qua drive)
+web/demo.mp4
+
+# Screenshots dev
+dev/screenshots/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Cloudflared
+*.bat.log

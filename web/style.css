@@ -1,0 +1,472 @@
+/* Face Attendance — Companion CSS (Sidebar Layout)
+   Handles dynamic states, sidebar nav, animations, and JS-generated elements. */
+
+/* ── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0a0e14;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #31353c;
+    border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #414752;
+    border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #58a6ff;
+}
+
+/* ── Material Symbols ───────────────────────────────────── */
+.material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* ── Sidebar Navigation ─────────────────────────────────── */
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    color: rgba(223, 226, 235, 0.5);
+    font-size: 0.875rem;
+    font-weight: 500;
+    border-radius: 8px;
+    transition: all 0.2s;
+    cursor: pointer;
+    text-decoration: none;
+    border-left: 3px solid transparent;
+}
+
+.nav-item:hover {
+    color: #dfe2eb;
+    background: #1c2026;
+}
+
+.nav-item.active {
+    color: #a2c9ff;
+    background: #1c2026;
+    border-left-color: #a2c9ff;
+    font-weight: 700;
+}
+
+.nav-item.active .nav-icon {
+    font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* ── Tab Content ────────────────────────────────────────── */
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* ── Status Badge ───────────────────────────────────────── */
+.status-badge.ok {
+    color: #7bdb80;
+}
+
+.status-badge.ok+.status-badge-dot,
+.status-badge-dot.on {
+    background: #7bdb80;
+    box-shadow: 0 0 8px rgba(123, 219, 128, 0.5);
+}
+
+/* ── Session Dots ───────────────────────────────────────── */
+.dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.dot.on {
+    background: #7bdb80;
+    box-shadow: 0 0 8px rgba(123, 219, 128, 0.5);
+    animation: pulse 1.5s infinite;
+}
+
+.dot.off {
+    background: #8b919d;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.35;
+    }
+}
+
+/* ── Camera Source Buttons ──────────────────────────────── */
+.source-btn {
+    color: #8b919d;
+    background: transparent;
+    cursor: pointer;
+}
+
+.source-btn:hover {
+    color: #c0c7d4;
+    border-color: #a2c9ff;
+}
+
+.source-btn.active {
+    background: rgba(88, 166, 255, 0.15);
+    color: #a2c9ff;
+    border-color: rgba(88, 166, 255, 0.4);
+}
+
+/* ── Scanning Circle ────────────────────────────────────── */
+.scan-circle {
+    animation: scanRotate 12s linear infinite;
+}
+
+@keyframes scanRotate {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ── Present List Items (dynamic) ───────────────────────── */
+.present-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+}
+
+.present-item:hover {
+    border-color: rgba(162, 201, 255, 0.15);
+    background: #262a31;
+}
+
+.present-item .avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(88, 166, 255, 0.1);
+    border: 2px solid rgba(123, 219, 128, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #a2c9ff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.present-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.present-item-info .name {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #dfe2eb;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.present-item-info .id {
+    font-size: 0.65rem;
+    color: #8b919d;
+    text-transform: uppercase;
+    font-weight: 500;
+}
+
+.present-item .time-col {
+    text-align: right;
+}
+
+.present-item .time {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #dfe2eb;
+}
+
+.present-item .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 8px;
+    background: rgba(123, 219, 128, 0.1);
+    color: #7bdb80;
+    font-size: 0.6rem;
+    font-weight: 700;
+    border-radius: 10px;
+    text-transform: uppercase;
+}
+
+.present-item .status-pill .pip {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #7bdb80;
+}
+
+.sub {
+    color: #8b919d;
+    font-size: 0.72rem;
+}
+
+.empty {
+    color: rgba(192, 199, 212, 0.3);
+}
+
+/* ── Dynamic Buttons (JS-generated) ────────────────────── */
+.btn {
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+}
+
+.btn-danger {
+    background: transparent;
+    color: #ffb4ab;
+    padding: 5px 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 6px;
+}
+
+.btn-danger:hover {
+    background: rgba(255, 180, 171, 0.1);
+}
+
+.btn-detail {
+    background: transparent;
+    color: #a2c9ff;
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 6px;
+}
+
+.btn-detail:hover {
+    background: rgba(162, 201, 255, 0.08);
+}
+
+/* ── Badges ─────────────────────────────────────────────── */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.badge-active {
+    background: rgba(123, 219, 128, 0.12);
+    color: #7bdb80;
+}
+
+.badge-ended {
+    background: rgba(139, 145, 157, 0.12);
+    color: #8b919d;
+}
+
+/* ── Enroll Result ──────────────────────────────────────── */
+#enroll-result.success {
+    background: rgba(123, 219, 128, 0.1);
+    color: #7bdb80;
+}
+
+#enroll-result.error {
+    background: rgba(255, 180, 171, 0.1);
+    color: #ffb4ab;
+}
+
+/* ── Table ──────────────────────────────────────────────── */
+tbody tr {
+    transition: background 0.15s;
+}
+
+tbody tr:hover td {
+    background: rgba(162, 201, 255, 0.03);
+}
+
+tbody td {
+    padding: 10px 16px;
+}
+
+tbody td strong {
+    font-weight: 600;
+}
+
+#detail-present-list li,
+#detail-absent-list li {
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(65, 71, 82, 0.2);
+    font-size: 0.82rem;
+}
+
+/* ── Toast ──────────────────────────────────────────────── */
+.toast {
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    animation: toastIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    max-width: 380px;
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.toast-success {
+    background: rgba(123, 219, 128, 0.88);
+    color: #002106;
+}
+
+.toast-error {
+    background: rgba(255, 180, 171, 0.88);
+    color: #690005;
+}
+
+.toast-info {
+    background: rgba(88, 166, 255, 0.88);
+    color: #001c38;
+}
+
+@keyframes toastIn {
+    from {
+        opacity: 0;
+        transform: translateX(40px) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
+}
+
+/* ── Demo Slideshow ─────────────────────────────────────── */
+.demo-slide {
+    position: absolute;
+    inset: 0;
+    padding: 24px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    opacity: 0;
+    transform: translateX(30px);
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: none;
+}
+
+.demo-slide.active {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: auto;
+}
+
+.slide-icon {
+    font-size: 2.5rem;
+    margin-bottom: 4px;
+    animation: iconFloat 2.5s ease-in-out infinite;
+}
+
+@keyframes iconFloat {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-5px);
+    }
+}
+
+.slide-visual {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    max-width: 380px;
+}
+
+.demo-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #414752;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.demo-dot.active {
+    background: #58a6ff;
+    width: 22px;
+    border-radius: 4px;
+}
+
+@keyframes guideBreath {
+
+    0%,
+    100% {
+        opacity: 0.3;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.6;
+        transform: scale(1.04);
+    }
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 1024px) {
+    aside {
+        display: none;
+    }
+
+    header {
+        left: 0 !important;
+    }
+
+    main {
+        margin-left: 0 !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .demo-modal {
+        width: 95% !important;
+    }
+
+    .demo-slides {
+        min-height: 340px;
+    }
+}

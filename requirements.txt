@@ -1,0 +1,14 @@
+# Face Attendance Check-in/Check-out - Dependencies
+opencv-python>=4.8.0
+numpy>=1.24.0
+onnxruntime>=1.16.0
+insightface>=0.7.3
+mediapipe>=0.10.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+loguru>=0.7.0
+scikit-learn>=1.3.0
+filterpy>=1.4.5
+scipy>=1.11.0
+jinja2>=3.1.0

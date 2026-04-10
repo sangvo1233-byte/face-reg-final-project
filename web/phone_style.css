@@ -1,0 +1,314 @@
+/* Phone Camera — Mobile-first Dark Theme */
+
+:root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3346;
+    --text: #e4e6f0;
+    --text2: #8b90a5;
+    --primary: #4f8cff;
+    --green: #34d399;
+    --red: #f87171;
+    --orange: #fbbf24;
+    --radius: 10px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.app {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh;
+}
+
+/* Header */
+.phone-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.phone-header h1 {
+    font-size: 1rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--primary), #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.badge {
+    font-size: 0.65rem;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: var(--surface2);
+    color: var(--text2);
+    font-weight: 500;
+}
+
+.badge-ok {
+    background: rgba(52, 211, 153, 0.15);
+    color: var(--green);
+}
+
+.badge-error {
+    background: rgba(248, 113, 113, 0.15);
+    color: var(--red);
+}
+
+.badge-warn {
+    background: rgba(251, 191, 36, 0.15);
+    color: var(--orange);
+}
+
+.fps-counter {
+    font-size: 0.7rem;
+    color: var(--text2);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+/* Viewfinder */
+.viewfinder-container {
+    position: relative;
+    flex: 1;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    min-height: 300px;
+}
+
+.viewfinder-container video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.face-guide {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 160px;
+    height: 210px;
+    pointer-events: none;
+    opacity: 0.5;
+    animation: guideBreath 3s ease-in-out infinite;
+}
+
+@keyframes guideBreath {
+
+    0%,
+    100% {
+        opacity: 0.3;
+        transform: translate(-50%, -50%) scale(1);
+    }
+
+    50% {
+        opacity: 0.6;
+        transform: translate(-50%, -50%) scale(1.03);
+    }
+}
+
+.status-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 17, 23, 0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    z-index: 10;
+}
+
+.status-overlay p {
+    font-size: 0.85rem;
+    color: var(--text2);
+}
+
+.spinner-small {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Controls */
+.controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.ctrl-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 12px;
+    background: var(--surface2);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.7rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 72px;
+}
+
+.ctrl-btn:active {
+    transform: scale(0.95);
+}
+
+.ctrl-btn-primary {
+    background: linear-gradient(135deg, #4f8cff, #3b5bdb);
+    color: #fff;
+}
+
+.ctrl-btn-danger {
+    background: linear-gradient(135deg, #f87171, #dc2626);
+    color: #fff;
+}
+
+.ctrl-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.ctrl-label {
+    font-size: 0.65rem;
+    color: var(--text2);
+    font-weight: 500;
+}
+
+.ctrl-group select {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.ctrl-group select:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+/* Stats */
+.stats-bar {
+    display: flex;
+    justify-content: space-around;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.stat-label {
+    font-size: 0.6rem;
+    color: var(--text2);
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.stat-value {
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Instructions */
+.instructions {
+    padding: 16px;
+    margin: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    flex-shrink: 0;
+}
+
+.instructions h3 {
+    font-size: 0.85rem;
+    margin-bottom: 10px;
+    color: var(--primary);
+}
+
+.instructions ol {
+    padding-left: 20px;
+    font-size: 0.8rem;
+    color: var(--text2);
+    line-height: 1.7;
+}
+
+.instructions strong {
+    color: var(--text);
+}
+
+/* Safe area for notched phones */
+@supports (padding-top: env(safe-area-inset-top)) {
+    .phone-header {
+        padding-top: calc(10px + env(safe-area-inset-top));
+    }
+
+    .stats-bar {
+        padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    }
+}
