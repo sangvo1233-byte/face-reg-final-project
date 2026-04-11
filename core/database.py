@@ -333,25 +333,51 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_session_result(self, session_id: int) -> dict:
-        """Return present and absent student lists for a session."""
-        attended_ids = set()
-        conn = self._conn()
-        rows = conn.execute(
-            "SELECT student_id FROM attendance WHERE session_id = ?", (session_id,)
-        ).fetchall()
-        for r in rows:
-            attended_ids.add(r['student_id'])
+        """Return present and absent student lists for a session.
 
-        all_students = self.get_all_students()
-        present = [s for s in all_students if s['id'] in attended_ids]
-        absent = [s for s in all_students if s['id'] not in attended_ids]
+        Uses a snapshot of students enrolled at or before the session's
+        creation time, so historical reports are not affected by later
+        student additions or deletions.
+        """
+        conn = self._conn()
+
+        # Get session creation timestamp
+        session_row = conn.execute(
+            "SELECT created_at FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if not session_row:
+            conn.close()
+            return {'present': [], 'absent': [], 'present_count': 0,
+                    'absent_count': 0, 'total': 0}
+
+        created_at = session_row['created_at']
+
+        # Students who were enrolled at or before session creation (snapshot)
+        snapshot_rows = conn.execute(
+            """SELECT * FROM students
+               WHERE enrolled_at <= ? AND is_active = 1
+               ORDER BY name""",
+            (created_at,)
+        ).fetchall()
+        snapshot = [dict(r) for r in snapshot_rows]
+
+        # Who actually attended this session
+        attended_ids = set(
+            r['student_id'] for r in conn.execute(
+                "SELECT student_id FROM attendance WHERE session_id = ?",
+                (session_id,)
+            ).fetchall()
+        )
         conn.close()
+
+        present = [s for s in snapshot if s['id'] in attended_ids]
+        absent  = [s for s in snapshot if s['id'] not in attended_ids]
         return {
             'present': present,
             'absent': absent,
             'present_count': len(present),
             'absent_count': len(absent),
-            'total': len(all_students)
+            'total': len(snapshot)
         }
 
     def get_student_history(self, student_id: str, limit: int = 50) -> list[dict]:

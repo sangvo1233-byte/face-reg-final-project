@@ -66,6 +66,12 @@ async def phone_camera_ws(websocket: WebSocket):
     finally:
         _phone_connected = False
         _phone_info = {}
+        # Clear the frame buffer so stale frames cannot be scanned
+        # after the phone disconnects.
+        global _latest_frame
+        with _lock:
+            _latest_frame = None
+        logger.info("Phone frame buffer cleared")
 
 
 # ── REST endpoints ──────────────────────────────────────────
@@ -81,6 +87,13 @@ async def phone_status():
 
 @router.get("/api/phone/latest")
 async def phone_latest():
+    """Return the latest phone frame only if it is fresh (< 3s old).
+
+    Returns 204 No Content when the phone is disconnected or the last
+    frame is stale, preventing stale frames from being scanned.
+    """
+    if not _is_fresh(max_age=3.0):
+        return Response(status_code=204, content=b"")
     frame = _get_frame()
     if frame is None:
         return Response(status_code=204, content=b"")
