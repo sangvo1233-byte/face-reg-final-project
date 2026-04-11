@@ -272,9 +272,15 @@ def main():
     print("Live detection running. Press Q to quit.\n")
     print("Controls: L=Toggle Landmarks | I=Toggle Info Panel | S=Screenshot | R=Reload | Q=Quit")
 
-    # Multi-frame liveness tracker
-    liveness_tracker = get_liveness()
-    print("Liveness tracker ready (EAR blink + head movement)")
+    # Multi-frame liveness tracker (optional — requires face_landmarker.task)
+    liveness_tracker = None
+    try:
+        liveness_tracker = get_liveness()
+        print("Liveness tracker ready (EAR blink + head movement)")
+    except FileNotFoundError as e:
+        print(f"[WARN] Liveness disabled: {e}")
+        print("[WARN] Download face_landmarker.task to enable liveness detection.")
+        print("[WARN] https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task")
 
     # State
     last_results = []           # cached detection results
@@ -301,7 +307,8 @@ def main():
         now = time.time()
 
         # ── Liveness tracking (EVERY frame) ─────────────────
-        liveness_tracker.process_frame(frame)
+        if liveness_tracker is not None:
+            liveness_tracker.process_frame(frame)
 
         # ── Face detection (throttled) ──────────────────────
         if now - last_detect_time >= detect_interval:
@@ -361,16 +368,28 @@ def main():
                         pass
 
                     # ── Multi-frame Liveness check ──────────
-                    lv = liveness_tracker.get_liveness((x1, y1, x2, y2))
-                    liveness_info = {
-                        "is_live": lv.is_live,
-                        "score": lv.score,
-                        "reason": lv.reason,
-                        "blinks": lv.blinks,
-                        "ear": lv.ear,
-                        "movement": lv.movement,
-                        "track_time": lv.track_time,
-                    }
+                    if liveness_tracker is not None:
+                        lv = liveness_tracker.get_liveness((x1, y1, x2, y2))
+                        liveness_info = {
+                            "is_live": lv.is_live,
+                            "score": lv.score,
+                            "reason": lv.reason,
+                            "blinks": lv.blinks,
+                            "ear": lv.ear,
+                            "movement": lv.movement,
+                            "track_time": lv.track_time,
+                        }
+                    else:
+                        # Liveness model not available — treat all faces as live
+                        liveness_info = {
+                            "is_live": True,
+                            "score": 1.0,
+                            "reason": "liveness_disabled",
+                            "blinks": 0,
+                            "ear": 0.0,
+                            "movement": 0.0,
+                            "track_time": 0.0,
+                        }
 
                     entry = {
                         "bbox":     (x1, y1, x2, y2),

@@ -60,11 +60,15 @@ def capture_best_frame(cap, engine, duration=3.0):
     best_frame = None
     best_score = -1
     start = time.time()
+    cancelled = False
 
     while True:
-        ret, frame = cap.read()
+        ret, raw_frame = cap.read()
         if not ret:
             break
+
+        # Work on a display copy — raw_frame stays clean for enrollment
+        frame = raw_frame.copy()
 
         elapsed = time.time() - start
         remaining = max(0.0, duration - elapsed)
@@ -72,19 +76,19 @@ def capture_best_frame(cap, engine, duration=3.0):
 
         # Try detect face for live preview bounding box
         try:
-            faces = engine.detect(frame)
+            faces = engine.detect(raw_frame)          # detect on clean frame
             for face in faces:
                 x1, y1, x2, y2 = [int(v) for v in face.bbox]
                 cv2.rectangle(frame, (x1, y1), (x2, y2), C_GREEN, 2, cv2.LINE_AA)
-                # Sharpness score (Laplacian variance)
-                roi = frame[max(0,y1):y2, max(0,x1):x2]
+                # Sharpness on clean ROI
+                roi = raw_frame[max(0,y1):y2, max(0,x1):x2]
                 if roi.size > 0:
                     lap = cv2.Laplacian(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
                     if lap > best_score:
                         best_score = lap
-                        best_frame = frame.copy()
-        except Exception:
-            pass
+                        best_frame = raw_frame.copy()  # save CLEAN frame
+        except Exception as e:
+            print(f"[WARN] Face detect error: {e}")
 
         # Countdown number
         if remaining > 0:
@@ -102,10 +106,11 @@ def capture_best_frame(cap, engine, duration=3.0):
         if elapsed >= duration:
             break
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("Cancelled.")
-            return None
+            print("Cancelled by user.")
+            cancelled = True
+            break
 
-    return best_frame
+    return best_frame, cancelled
 
 def flash_result(cap, success, message, duration=2.0):
     """Show a full-screen result flash."""
@@ -154,12 +159,19 @@ def main():
     print(f"\nGet ready! Capturing in {COUNTDOWN} seconds...")
     print("Press Q to cancel.\n")
 
-    frame = capture_best_frame(cap, engine, duration=COUNTDOWN)
+    frame, cancelled = capture_best_frame(cap, engine, duration=COUNTDOWN)
+
+    if cancelled:
+        cap.release()
+        cv2.destroyAllWindows()
+        print("Enroll cancelled.")
+        sys.exit(0)
 
     if frame is None:
         cap.release()
         cv2.destroyAllWindows()
-        sys.exit(0)
+        print("ERROR: No face detected during capture window. Check camera and lighting.")
+        sys.exit(1)
 
     print("Enrolling face...")
     result = engine.enroll_from_photo(student_id, name, frame, class_name)
