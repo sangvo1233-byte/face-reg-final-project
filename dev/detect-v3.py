@@ -53,7 +53,41 @@ FONT        = cv2.FONT_HERSHEY_DUPLEX
 FONT_SMALL  = cv2.FONT_HERSHEY_SIMPLEX
 DETECT_FPS  = 10          # max face-detect calls per second (throttle)
 SCREENSHOT_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
-INFO_PANEL_W = 380        # width of the right-side info panel (wider for readability)
+
+# ── Auto-detect screen resolution and DPI scaling ──────────
+def _get_screen_info():
+    """Detect screen resolution and compute scale factor."""
+    screen_w, screen_h = 1920, 1080  # fallback
+    try:
+        import ctypes
+        # Enable DPI awareness on Windows (avoids blurry scaling by OS)
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_DPI_AWARE
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+        screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+        screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+    except Exception:
+        pass
+    # Scale relative to 1080p baseline
+    scale = max(0.6, min(2.5, screen_h / 1080.0))
+    return screen_w, screen_h, scale
+
+SCREEN_W, SCREEN_H, UI_SCALE = _get_screen_info()
+
+# Scale-aware helpers
+def S(val):
+    """Scale a pixel value by UI_SCALE."""
+    return int(val * UI_SCALE)
+
+def FS(val):
+    """Scale a font size by UI_SCALE."""
+    return val * UI_SCALE
+
+INFO_PANEL_W = S(380)     # width of the right-side info panel
 
 # V3: Stricter cosine threshold (overrides config.COSINE_THRESHOLD)
 V3_COSINE_THRESHOLD = 0.52
@@ -551,22 +585,22 @@ def draw_rounded_rect(img, pt1, pt2, color, thickness=2, r=12):
 def draw_label_box(img, text, sub_text, extra_text, x1, y1, color):
     """Draw a filled label box above the bounding box with up to 3 lines."""
     line_count = 1 + (1 if sub_text else 0) + (1 if extra_text else 0)
-    label_h = 22 * line_count + 8
+    label_h = S(22) * line_count + S(8)
     lx1, ly1 = x1, max(0, y1 - label_h)
-    lx2, ly2 = x1 + max(240, len(text) * 13 + 24), y1
+    lx2, ly2 = x1 + max(S(240), len(text) * S(13) + S(24)), y1
 
     overlay = img.copy()
     cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), color, -1)
     cv2.addWeighted(overlay, 0.82, img, 0.18, 0, img)
 
-    y_off = ly1 + 18
-    cv2.putText(img, text, (lx1 + 8, y_off), FONT, 0.52, C_WHITE, 1, cv2.LINE_AA)
+    y_off = ly1 + S(18)
+    cv2.putText(img, text, (lx1 + S(8), y_off), FONT, FS(0.52), C_WHITE, 1, cv2.LINE_AA)
     if sub_text:
-        y_off += 20
-        cv2.putText(img, sub_text, (lx1 + 8, y_off), FONT_SMALL, 0.48, C_WHITE, 1, cv2.LINE_AA)
+        y_off += S(20)
+        cv2.putText(img, sub_text, (lx1 + S(8), y_off), FONT_SMALL, FS(0.48), C_WHITE, 1, cv2.LINE_AA)
     if extra_text:
-        y_off += 20
-        cv2.putText(img, extra_text, (lx1 + 8, y_off), FONT_SMALL, 0.48, C_GOLD, 1, cv2.LINE_AA)
+        y_off += S(20)
+        cv2.putText(img, extra_text, (lx1 + S(8), y_off), FONT_SMALL, FS(0.48), C_GOLD, 1, cv2.LINE_AA)
 
 
 def draw_landmarks(img, landmarks, color=C_CYAN):
@@ -575,17 +609,18 @@ def draw_landmarks(img, landmarks, color=C_CYAN):
         return
     for i, (x, y) in enumerate(landmarks[:5]):
         px, py = int(x), int(y)
-        cv2.circle(img, (px, py), 5, color, 2, cv2.LINE_AA)
-        cv2.circle(img, (px, py), 2, C_WHITE, -1, cv2.LINE_AA)
+        cv2.circle(img, (px, py), S(5), color, 2, cv2.LINE_AA)
+        cv2.circle(img, (px, py), S(2), C_WHITE, -1, cv2.LINE_AA)
         label = LANDMARK_LABELS[i] if i < len(LANDMARK_LABELS) else str(i)
-        cv2.putText(img, label, (px + 7, py - 4), FONT_SMALL, 0.42, color, 1, cv2.LINE_AA)
+        cv2.putText(img, label, (px + S(7), py - S(4)), FONT_SMALL, FS(0.42), color, 1, cv2.LINE_AA)
 
 
 def draw_hud(img, fps, face_count, total_students, show_landmarks, show_info, show_moire):
     """Top-left HUD: FPS, face count, DB size, toggle states."""
     h, w = img.shape[:2]
+    hud_h = S(44)
     overlay = img.copy()
-    cv2.rectangle(overlay, (0, 0), (w, 44), C_BLACK, -1)
+    cv2.rectangle(overlay, (0, 0), (w, hud_h), C_BLACK, -1)
     cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
 
     items = [
@@ -597,10 +632,10 @@ def draw_hud(img, fps, face_count, total_students, show_landmarks, show_info, sh
         (f"[M]oire:{'ON' if show_moire else 'OFF'}", C_PURPLE if show_moire else C_DIM),
         ("Q=Quit  S=Shot  R=Reload", C_DIM),
     ]
-    x = 14
+    x = S(14)
     for txt, color in items:
-        cv2.putText(img, txt, (x, 29), FONT_SMALL, 0.48, color, 1, cv2.LINE_AA)
-        x += len(txt) * 8 + 16
+        cv2.putText(img, txt, (x, S(29)), FONT_SMALL, FS(0.48), color, 1, cv2.LINE_AA)
+        x += len(txt) * S(8) + S(16)
 
 
 def conf_bar(img, x1, y2, x2, confidence, color):
@@ -918,6 +953,7 @@ def main():
     moire_detector = MoireDetector()
     challenge = ChallengeResponse()
 
+    print(f"Screen: {SCREEN_W}x{SCREEN_H}, UI Scale: {UI_SCALE:.2f}x")
     print("\nOpening camera...")
     cap = cv2.VideoCapture(CAM_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  FRAME_W)
@@ -927,6 +963,24 @@ def main():
     if not cap.isOpened():
         print(f"ERROR: Cannot open camera (index {CAM_INDEX})")
         sys.exit(1)
+
+    # ── Create auto-fit window ────────────────────────────
+    win_name = "Live Face Detection V3"
+    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+    # Compute window size: fit (frame + panel) into 90% of screen
+    total_w = FRAME_W + INFO_PANEL_W
+    total_h = FRAME_H
+    max_w = int(SCREEN_W * 0.92)
+    max_h = int(SCREEN_H * 0.90)
+    fit_scale = min(max_w / total_w, max_h / total_h, 1.0)
+    win_w = int(total_w * fit_scale)
+    win_h = int(total_h * fit_scale)
+    cv2.resizeWindow(win_name, win_w, win_h)
+    # Center window on screen
+    win_x = max(0, (SCREEN_W - win_w) // 2)
+    win_y = max(0, (SCREEN_H - win_h) // 2 - 30)
+    cv2.moveWindow(win_name, win_x, win_y)
+    print(f"Window: {win_w}x{win_h} @ ({win_x},{win_y})")
 
     # V3: Query embedding counts for all students
     emb_counts = {}  # student_id → count
@@ -1217,7 +1271,7 @@ def main():
 
         # ── Perf stats bar (below HUD) ───────────────────────
         perf_txt = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  Mesh:{perf_mesh_ms:.0f}ms  Skip:{MOIRE_EVERY_N_DETECT-1}/{MOIRE_EVERY_N_DETECT}"
-        cv2.putText(frame, perf_txt, (14, 56), FONT_SMALL, 0.40, C_DIM, 1, cv2.LINE_AA)
+        cv2.putText(frame, perf_txt, (S(14), S(56)), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
 
         # ── FPS calculation ─────────────────────────────────
         fps_counter += 1
@@ -1232,7 +1286,7 @@ def main():
         else:
             display_frame = frame
 
-        cv2.imshow("Live Face Detection V3", display_frame)
+        cv2.imshow(win_name, display_frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):

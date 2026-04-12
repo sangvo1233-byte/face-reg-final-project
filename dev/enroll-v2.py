@@ -41,6 +41,36 @@ FONT            = cv2.FONT_HERSHEY_DUPLEX
 FONT_S          = cv2.FONT_HERSHEY_SIMPLEX
 WIN_NAME        = "Face Enrollment V2"
 
+# ── Auto-detect screen resolution and DPI scaling ──────────
+def _get_screen_info():
+    """Detect screen resolution and compute scale factor."""
+    screen_w, screen_h = 1920, 1080
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+        screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+        screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+    except Exception:
+        pass
+    scale = max(0.6, min(2.5, screen_h / 1080.0))
+    return screen_w, screen_h, scale
+
+SCREEN_W, SCREEN_H, UI_SCALE = _get_screen_info()
+
+def S(val):
+    """Scale a pixel value by UI_SCALE."""
+    return int(val * UI_SCALE)
+
+def FS(val):
+    """Scale a font size by UI_SCALE."""
+    return val * UI_SCALE
+
 # Enrollment parameters
 PHASE_DURATION  = 4.0      # seconds per phase
 MIN_GOOD_FRAMES = 3        # minimum quality frames needed per phase
@@ -896,7 +926,8 @@ def main():
     else:
         print(f"[WARN] FaceLandmarker not found — pose verification disabled")
 
-    print("\nOpening camera...")
+    print(f"\nScreen: {SCREEN_W}x{SCREEN_H}, UI Scale: {UI_SCALE:.2f}x")
+    print("Opening camera...")
     cap = cv2.VideoCapture(CAM_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  FRAME_W)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
@@ -904,6 +935,19 @@ def main():
     if not cap.isOpened():
         print(f"ERROR: Cannot open camera (index {CAM_INDEX})")
         sys.exit(1)
+
+    # ── Create auto-fit window ────────────────────────────
+    cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+    max_w = int(SCREEN_W * 0.88)
+    max_h = int(SCREEN_H * 0.88)
+    fit_scale = min(max_w / FRAME_W, max_h / FRAME_H, 1.0)
+    win_w = int(FRAME_W * fit_scale)
+    win_h = int(FRAME_H * fit_scale)
+    cv2.resizeWindow(WIN_NAME, win_w, win_h)
+    win_x = max(0, (SCREEN_W - win_w) // 2)
+    win_y = max(0, (SCREEN_H - win_h) // 2 - 30)
+    cv2.moveWindow(WIN_NAME, win_x, win_y)
+    print(f"Window: {win_w}x{win_h} @ ({win_x},{win_y})")
 
     # ── Welcome screen ──────────────────────────────────
     if not show_welcome_screen(cap, student_id, name, class_name, duration=3.0):
