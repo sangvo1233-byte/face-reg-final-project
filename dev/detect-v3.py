@@ -48,11 +48,12 @@ import config
 CAM_INDEX   = 0
 FRAME_W     = 1280
 FRAME_H     = 720
-FONT        = cv2.FONT_HERSHEY_SIMPLEX
-FONT_SMALL  = cv2.FONT_HERSHEY_PLAIN
+# Use DUPLEX font for sharper, bolder text rendering
+FONT        = cv2.FONT_HERSHEY_DUPLEX
+FONT_SMALL  = cv2.FONT_HERSHEY_SIMPLEX
 DETECT_FPS  = 10          # max face-detect calls per second (throttle)
 SCREENSHOT_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
-INFO_PANEL_W = 360        # width of the right-side info panel
+INFO_PANEL_W = 380        # width of the right-side info panel (wider for readability)
 
 # V3: Stricter cosine threshold (overrides config.COSINE_THRESHOLD)
 V3_COSINE_THRESHOLD = 0.52
@@ -65,14 +66,14 @@ MESH_SKIP_NO_FACE = True  # skip MediaPipe when no faces detected
 C_PRESENT  = ( 80, 220,  80)   # green  — known face
 C_UNKNOWN  = ( 40, 160, 255)   # amber  — face detected, no match
 C_SPOOF    = ( 60,  60, 220)   # red    — spoof
-C_WHITE    = (240, 240, 240)
+C_WHITE    = (245, 245, 245)
 C_BLACK    = ( 10,  10,  10)
 C_GOLD     = ( 30, 200, 255)
-C_DIM      = (120, 120, 120)
+C_DIM      = (170, 170, 175)   # brighter for readability on dark bg
 C_CYAN     = (220, 200,  40)   # cyan — landmarks
 
 C_BLUE     = (220, 140,  40)   # blue — info
-C_PANEL_BG = ( 30,  30,  35)   # dark panel background
+C_PANEL_BG = ( 28,  28,  32)   # dark panel background
 C_PURPLE   = (180,  60, 200)   # purple — moiré
 C_ORANGE   = ( 40, 140, 255)   # orange — challenge active
 
@@ -550,22 +551,22 @@ def draw_rounded_rect(img, pt1, pt2, color, thickness=2, r=12):
 def draw_label_box(img, text, sub_text, extra_text, x1, y1, color):
     """Draw a filled label box above the bounding box with up to 3 lines."""
     line_count = 1 + (1 if sub_text else 0) + (1 if extra_text else 0)
-    label_h = 20 * line_count + 8
+    label_h = 22 * line_count + 8
     lx1, ly1 = x1, max(0, y1 - label_h)
-    lx2, ly2 = x1 + max(220, len(text) * 13 + 20), y1
+    lx2, ly2 = x1 + max(240, len(text) * 13 + 24), y1
 
     overlay = img.copy()
     cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), color, -1)
-    cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
+    cv2.addWeighted(overlay, 0.82, img, 0.18, 0, img)
 
-    y_off = ly1 + 16
-    cv2.putText(img, text, (lx1 + 8, y_off), FONT, 0.55, C_WHITE, 2, cv2.LINE_AA)
+    y_off = ly1 + 18
+    cv2.putText(img, text, (lx1 + 8, y_off), FONT, 0.52, C_WHITE, 1, cv2.LINE_AA)
     if sub_text:
-        y_off += 18
-        cv2.putText(img, sub_text, (lx1 + 8, y_off), FONT, 0.44, C_WHITE, 1, cv2.LINE_AA)
+        y_off += 20
+        cv2.putText(img, sub_text, (lx1 + 8, y_off), FONT_SMALL, 0.48, C_WHITE, 1, cv2.LINE_AA)
     if extra_text:
-        y_off += 18
-        cv2.putText(img, extra_text, (lx1 + 8, y_off), FONT, 0.44, C_GOLD, 1, cv2.LINE_AA)
+        y_off += 20
+        cv2.putText(img, extra_text, (lx1 + 8, y_off), FONT_SMALL, 0.48, C_GOLD, 1, cv2.LINE_AA)
 
 
 def draw_landmarks(img, landmarks, color=C_CYAN):
@@ -577,15 +578,15 @@ def draw_landmarks(img, landmarks, color=C_CYAN):
         cv2.circle(img, (px, py), 5, color, 2, cv2.LINE_AA)
         cv2.circle(img, (px, py), 2, C_WHITE, -1, cv2.LINE_AA)
         label = LANDMARK_LABELS[i] if i < len(LANDMARK_LABELS) else str(i)
-        cv2.putText(img, label, (px + 7, py - 4), FONT, 0.33, color, 1, cv2.LINE_AA)
+        cv2.putText(img, label, (px + 7, py - 4), FONT_SMALL, 0.42, color, 1, cv2.LINE_AA)
 
 
 def draw_hud(img, fps, face_count, total_students, show_landmarks, show_info, show_moire):
     """Top-left HUD: FPS, face count, DB size, toggle states."""
     h, w = img.shape[:2]
     overlay = img.copy()
-    cv2.rectangle(overlay, (0, 0), (w, 42), C_BLACK, -1)
-    cv2.addWeighted(overlay, 0.6, img, 0.4, 0, img)
+    cv2.rectangle(overlay, (0, 0), (w, 44), C_BLACK, -1)
+    cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
 
     items = [
         (f"FPS {fps:5.1f}", C_GOLD),
@@ -594,12 +595,12 @@ def draw_hud(img, fps, face_count, total_students, show_landmarks, show_info, sh
         (f"[L]mk:{'ON' if show_landmarks else 'OFF'}", C_CYAN if show_landmarks else C_DIM),
         (f"[I]nfo:{'ON' if show_info else 'OFF'}", C_BLUE if show_info else C_DIM),
         (f"[M]oire:{'ON' if show_moire else 'OFF'}", C_PURPLE if show_moire else C_DIM),
-        ("Q=Quit S=Shot R=Reload", C_DIM),
+        ("Q=Quit  S=Shot  R=Reload", C_DIM),
     ]
     x = 14
     for txt, color in items:
-        cv2.putText(img, txt, (x, 28), FONT, 0.42, color, 1, cv2.LINE_AA)
-        x += len(txt) * 8 + 14
+        cv2.putText(img, txt, (x, 29), FONT_SMALL, 0.48, color, 1, cv2.LINE_AA)
+        x += len(txt) * 8 + 16
 
 
 def conf_bar(img, x1, y2, x2, confidence, color):
@@ -711,16 +712,16 @@ def draw_info_panel(img, results, moire_results, challenge, panel_w=INFO_PANEL_W
     panel = np.full((h, panel_w, 3), C_PANEL_BG, dtype=np.uint8)
 
     # Title
-    cv2.putText(panel, "FACE RECOGNITION V3", (12, 30), FONT, 0.6, C_GOLD, 2, cv2.LINE_AA)
-    cv2.putText(panel, f"Threshold: {V3_COSINE_THRESHOLD:.0%}", (panel_w - 130, 30), FONT, 0.35, C_DIM, 1, cv2.LINE_AA)
-    cv2.line(panel, (12, 40), (panel_w - 12, 40), C_DIM, 1, cv2.LINE_AA)
+    cv2.putText(panel, "FACE RECOGNITION V3", (14, 28), FONT, 0.55, C_GOLD, 1, cv2.LINE_AA)
+    cv2.putText(panel, f"Thr: {V3_COSINE_THRESHOLD:.0%}", (panel_w - 90, 28), FONT_SMALL, 0.45, C_DIM, 1, cv2.LINE_AA)
+    cv2.line(panel, (14, 38), (panel_w - 14, 38), C_DIM, 1, cv2.LINE_AA)
 
-    y = 60
+    y = 58
 
-    # ── Challenge status section ────────────────────────
+    # ── Challenge status section ────────────────────
     if challenge.active or challenge.passed or challenge.failed:
-        cv2.putText(panel, "ANTI-SPOOF V3", (12, y), FONT, 0.45, C_ORANGE, 1, cv2.LINE_AA)
-        y += 20
+        cv2.putText(panel, "ANTI-SPOOF V3", (14, y), FONT, 0.45, C_ORANGE, 1, cv2.LINE_AA)
+        y += 22
 
         status_txt = challenge.status_text
         if challenge.active:
@@ -730,18 +731,18 @@ def draw_info_panel(img, results, moire_results, challenge, panel_w=INFO_PANEL_W
         else:
             s_color = C_SPOOF
 
-        max_chars = panel_w // 8
+        max_chars = panel_w // 9
         while status_txt:
             chunk = status_txt[:max_chars]
             status_txt = status_txt[max_chars:]
-            cv2.putText(panel, chunk, (12, y), FONT, 0.4, s_color, 1, cv2.LINE_AA)
-            y += 16
+            cv2.putText(panel, chunk, (14, y), FONT_SMALL, 0.45, s_color, 1, cv2.LINE_AA)
+            y += 18
         y += 6
-        cv2.line(panel, (12, y), (panel_w - 12, y), (50, 50, 55), 1)
+        cv2.line(panel, (14, y), (panel_w - 14, y), (60, 60, 65), 1)
         y += 14
 
     if not results:
-        cv2.putText(panel, "No faces detected", (12, y), FONT, 0.45, C_DIM, 1, cv2.LINE_AA)
+        cv2.putText(panel, "No faces detected", (14, y), FONT, 0.45, C_DIM, 1, cv2.LINE_AA)
     else:
         for i, r in enumerate(results):
             if y > h - 40:
@@ -750,72 +751,72 @@ def draw_info_panel(img, results, moire_results, challenge, panel_w=INFO_PANEL_W
             color = C_PRESENT if r["status"] == "present" else (C_SPOOF if r["status"] == "spoof" else C_UNKNOWN)
 
             # Face index header
-            cv2.putText(panel, f"--- Face #{i+1} ---", (12, y), FONT, 0.45, color, 1, cv2.LINE_AA)
-            y += 22
+            cv2.putText(panel, f"--- Face #{i+1} ---", (14, y), FONT, 0.45, color, 1, cv2.LINE_AA)
+            y += 24
 
             # Aligned face thumbnail
             if r.get("aligned") is not None:
                 thumb = cv2.resize(r["aligned"], (64, 64))
-                cv2.rectangle(panel, (12, y), (78, y + 66), color, 2)
-                panel[y+1:y+65, 13:77] = thumb
-                tx = 88
-                cv2.putText(panel, r["name"], (tx, y + 18), FONT, 0.5, C_WHITE, 1, cv2.LINE_AA)
+                cv2.rectangle(panel, (14, y), (80, y + 66), color, 2)
+                panel[y+1:y+65, 15:79] = thumb
+                tx = 90
+                cv2.putText(panel, r["name"], (tx, y + 18), FONT, 0.48, C_WHITE, 1, cv2.LINE_AA)
                 status_txt = r["status"].upper()
-                cv2.putText(panel, status_txt, (tx, y + 36), FONT, 0.42, color, 1, cv2.LINE_AA)
+                cv2.putText(panel, status_txt, (tx, y + 38), FONT_SMALL, 0.45, color, 1, cv2.LINE_AA)
                 if r["sid"]:
-                    cv2.putText(panel, f"ID: {r['sid']}", (tx, y + 54), FONT, 0.4, C_DIM, 1, cv2.LINE_AA)
+                    cv2.putText(panel, f"ID: {r['sid']}", (tx, y + 56), FONT_SMALL, 0.45, C_DIM, 1, cv2.LINE_AA)
                 y += 72
             else:
-                cv2.putText(panel, f"Name: {r['name']}", (12, y), FONT, 0.42, C_WHITE, 1, cv2.LINE_AA)
-                y += 18
+                cv2.putText(panel, f"Name: {r['name']}", (14, y), FONT_SMALL, 0.45, C_WHITE, 1, cv2.LINE_AA)
+                y += 20
 
             # Confidence
             conf_pct = r["conf"] * 100
             conf_color = C_PRESENT if conf_pct >= 50 else C_UNKNOWN
-            cv2.putText(panel, f"Confidence: {conf_pct:.1f}%", (12, y), FONT, 0.42, conf_color, 1, cv2.LINE_AA)
+            cv2.putText(panel, f"Confidence: {conf_pct:.1f}%", (14, y), FONT_SMALL, 0.45, conf_color, 1, cv2.LINE_AA)
             bar_x = 180
             bar_w = panel_w - bar_x - 16
             filled = int(bar_w * min(1.0, r["conf"]))
             cv2.rectangle(panel, (bar_x, y - 10), (bar_x + bar_w, y), C_BLACK, -1)
             cv2.rectangle(panel, (bar_x, y - 10), (bar_x + filled, y), conf_color, -1)
-            y += 20
+            y += 22
 
             # Detection confidence
             if r.get("det_conf") is not None:
-                cv2.putText(panel, f"Det Score: {r['det_conf']:.2f}", (12, y), FONT, 0.42, C_DIM, 1, cv2.LINE_AA)
-                y += 18
+                cv2.putText(panel, f"Det Score: {r['det_conf']:.2f}", (14, y), FONT_SMALL, 0.45, C_DIM, 1, cv2.LINE_AA)
+                y += 20
 
-            # ── Moiré info (NEW) ────────────────────────
+            # ── Moiré info ────────────────────────────
             mr = moire_results.get(i)
             if mr:
                 m_color = C_PRESENT if not mr.get("is_screen") else C_SPOOF
-                cv2.putText(panel, f"Moire Score: {mr['moire_score']:.0%}", (12, y), FONT, 0.42, m_color, 1, cv2.LINE_AA)
-                bar_x2 = 180
+                cv2.putText(panel, f"Moire: {mr['moire_score']:.0%}", (14, y), FONT_SMALL, 0.45, m_color, 1, cv2.LINE_AA)
+                bar_x2 = 140
                 bar_w2 = panel_w - bar_x2 - 16
                 filled2 = int(bar_w2 * min(1.0, mr["moire_score"]))
                 cv2.rectangle(panel, (bar_x2, y - 10), (bar_x2 + bar_w2, y), C_BLACK, -1)
                 cv2.rectangle(panel, (bar_x2, y - 10), (bar_x2 + filled2, y), m_color, -1)
                 y += 18
                 screen_txt = "SCREEN detected!" if mr.get("is_screen") else "REAL face"
-                cv2.putText(panel, f"  {screen_txt}", (12, y), FONT, 0.38, m_color, 1, cv2.LINE_AA)
-                y += 16
-                cv2.putText(panel, f"  Peak:{mr.get('peak_ratio', 0):.1f} Period:{mr.get('periodicity', 0):.1f} Grid:{mr.get('grid_score', 0):.2f}",
-                            (12, y), FONT, 0.32, C_DIM, 1, cv2.LINE_AA)
-                y += 16
+                cv2.putText(panel, f"  {screen_txt}", (14, y), FONT_SMALL, 0.42, m_color, 1, cv2.LINE_AA)
+                y += 18
+                cv2.putText(panel, f"  Pk:{mr.get('peak_ratio', 0):.1f} Pd:{mr.get('periodicity', 0):.1f} Gr:{mr.get('grid_score', 0):.2f}",
+                            (14, y), FONT_SMALL, 0.40, C_DIM, 1, cv2.LINE_AA)
+                y += 18
 
             # Quality
             if r.get("quality"):
                 q = r["quality"]
-                cv2.putText(panel, f"Blur: {q['blur']:.0f}  Bright: {q['bright']:.0f}", (12, y), FONT, 0.38, C_DIM, 1, cv2.LINE_AA)
-                y += 16
-                cv2.putText(panel, f"Yaw: {q['yaw']:.1f} deg  Size: {q['size']}px", (12, y), FONT, 0.38, C_DIM, 1, cv2.LINE_AA)
-                y += 16
+                cv2.putText(panel, f"Blur: {q['blur']:.0f}  Bright: {q['bright']:.0f}", (14, y), FONT_SMALL, 0.42, C_DIM, 1, cv2.LINE_AA)
+                y += 18
+                cv2.putText(panel, f"Yaw: {q['yaw']:.1f}deg  Size: {q['size']}px", (14, y), FONT_SMALL, 0.42, C_DIM, 1, cv2.LINE_AA)
+                y += 18
                 q_status = "PASS" if q["passed"] else "FAIL"
                 q_color = C_PRESENT if q["passed"] else C_SPOOF
-                cv2.putText(panel, f"Quality: {q_status}", (12, y), FONT, 0.42, q_color, 1, cv2.LINE_AA)
-                y += 20
+                cv2.putText(panel, f"Quality: {q_status}", (14, y), FONT_SMALL, 0.45, q_color, 1, cv2.LINE_AA)
+                y += 22
 
-            # Liveness info (multi-frame — original)
+            # Liveness info
             if r.get("liveness"):
                 lv = r["liveness"]
                 if lv["is_live"] is None:
@@ -827,17 +828,17 @@ def draw_info_panel(img, results, moire_results, challenge, panel_w=INFO_PANEL_W
                 else:
                     lv_color = C_SPOOF
                     lv_status = "SPOOF"
-                cv2.putText(panel, f"Liveness: {lv_status}", (12, y), FONT, 0.42, lv_color, 1, cv2.LINE_AA)
+                cv2.putText(panel, f"Liveness: {lv_status}", (14, y), FONT_SMALL, 0.45, lv_color, 1, cv2.LINE_AA)
+                y += 20
+                cv2.putText(panel, f"  Blinks: {lv.get('blinks', 0)}  EAR: {lv.get('ear', 0):.2f}", (14, y), FONT_SMALL, 0.42, C_DIM, 1, cv2.LINE_AA)
                 y += 18
-                cv2.putText(panel, f"  Blinks: {lv.get('blinks', 0)}  EAR: {lv.get('ear', 0):.2f}", (12, y), FONT, 0.36, C_DIM, 1, cv2.LINE_AA)
-                y += 16
-                cv2.putText(panel, f"  Movement: {lv.get('movement', 0):.1f}px", (12, y), FONT, 0.36, C_DIM, 1, cv2.LINE_AA)
-                y += 16
-                cv2.putText(panel, f"  Track: {lv.get('track_time', 0):.1f}s", (12, y), FONT, 0.36, C_DIM, 1, cv2.LINE_AA)
-                y += 16
+                cv2.putText(panel, f"  Movement: {lv.get('movement', 0):.1f}px", (14, y), FONT_SMALL, 0.42, C_DIM, 1, cv2.LINE_AA)
+                y += 18
+                cv2.putText(panel, f"  Track: {lv.get('track_time', 0):.1f}s", (14, y), FONT_SMALL, 0.42, C_DIM, 1, cv2.LINE_AA)
+                y += 18
                 if lv_status == "SPOOF" and lv.get("reason"):
-                    cv2.putText(panel, f"  Reason: {lv['reason']}", (12, y), FONT, 0.36, C_SPOOF, 1, cv2.LINE_AA)
-                    y += 16
+                    cv2.putText(panel, f"  Reason: {lv['reason']}", (14, y), FONT_SMALL, 0.42, C_SPOOF, 1, cv2.LINE_AA)
+                    y += 18
 
             # Embedding info (V3: show count)
             if r.get("emb_dim"):
@@ -846,16 +847,16 @@ def draw_info_panel(img, results, moire_results, challenge, panel_w=INFO_PANEL_W
                     ec = r["emb_count"]
                     ec_color = C_PRESENT if ec >= 3 else (C_GOLD if ec >= 2 else C_ORANGE)
                     emb_count_txt += f"  Angles: {ec}"
-                    cv2.putText(panel, emb_count_txt, (12, y), FONT, 0.38, ec_color, 1, cv2.LINE_AA)
-                    y += 16
-                    enroll_txt = "Multi-angle V2" if ec >= 3 else "Single-angle (re-enroll recommended)"
-                    cv2.putText(panel, f"  Enroll: {enroll_txt}", (12, y), FONT, 0.34, ec_color, 1, cv2.LINE_AA)
+                    cv2.putText(panel, emb_count_txt, (14, y), FONT_SMALL, 0.45, ec_color, 1, cv2.LINE_AA)
+                    y += 18
+                    enroll_txt = "Multi-angle V2" if ec >= 3 else "Single (re-enroll)"
+                    cv2.putText(panel, f"  Enroll: {enroll_txt}", (14, y), FONT_SMALL, 0.42, ec_color, 1, cv2.LINE_AA)
                 else:
-                    cv2.putText(panel, emb_count_txt, (12, y), FONT, 0.38, C_DIM, 1, cv2.LINE_AA)
-                y += 18
+                    cv2.putText(panel, emb_count_txt, (14, y), FONT_SMALL, 0.45, C_DIM, 1, cv2.LINE_AA)
+                y += 20
 
             # Separator
-            cv2.line(panel, (12, y), (panel_w - 12, y), (50, 50, 55), 1)
+            cv2.line(panel, (14, y), (panel_w - 14, y), (60, 60, 65), 1)
             y += 14
 
     combined = np.hstack([img, panel])
@@ -1216,7 +1217,7 @@ def main():
 
         # ── Perf stats bar (below HUD) ───────────────────────
         perf_txt = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  Mesh:{perf_mesh_ms:.0f}ms  Skip:{MOIRE_EVERY_N_DETECT-1}/{MOIRE_EVERY_N_DETECT}"
-        cv2.putText(frame, perf_txt, (14, 52), FONT, 0.32, C_DIM, 1, cv2.LINE_AA)
+        cv2.putText(frame, perf_txt, (14, 56), FONT_SMALL, 0.40, C_DIM, 1, cv2.LINE_AA)
 
         # ── FPS calculation ─────────────────────────────────
         fps_counter += 1

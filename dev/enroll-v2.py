@@ -37,8 +37,8 @@ import config
 CAM_INDEX       = 0
 FRAME_W         = 1280
 FRAME_H         = 720
-FONT            = cv2.FONT_HERSHEY_SIMPLEX
-FONT_S          = cv2.FONT_HERSHEY_PLAIN
+FONT            = cv2.FONT_HERSHEY_DUPLEX
+FONT_S          = cv2.FONT_HERSHEY_SIMPLEX
 WIN_NAME        = "Face Enrollment V2"
 
 # Enrollment parameters
@@ -54,13 +54,13 @@ TURN_THRESHOLD  = 0.04     # nose must shift at least this much for left/right
 C_GREEN  = ( 80, 220,  80)
 C_BLUE   = (255, 160,  40)
 C_RED    = ( 60,  60, 220)
-C_WHITE  = (240, 240, 240)
+C_WHITE  = (245, 245, 245)
 C_BLACK  = ( 10,  10,  10)
 C_GOLD   = ( 30, 200, 255)
 C_CYAN   = (220, 200,  40)
 C_ORANGE = ( 40, 140, 255)
-C_DIM    = (120, 120, 120)
-C_PANEL  = ( 30,  30,  35)
+C_DIM    = (170, 170, 175)
+C_PANEL  = ( 28,  28,  32)
 C_PULSE_GREEN = ( 60, 255, 60)
 
 # ── Phase definitions ──────────────────────────────────────
