@@ -57,6 +57,10 @@ INFO_PANEL_W = 360        # width of the right-side info panel
 # V3: Stricter cosine threshold (overrides config.COSINE_THRESHOLD)
 V3_COSINE_THRESHOLD = 0.52
 
+# V3: Performance tuning
+MOIRE_EVERY_N_DETECT = 3  # run moiré every Nth detect cycle (saves ~16ms/skip)
+MESH_SKIP_NO_FACE = True  # skip MediaPipe when no faces detected
+
 # ── Colors (BGR) ────────────────────────────────────────────
 C_PRESENT  = ( 80, 220,  80)   # green  — known face
 C_UNKNOWN  = ( 40, 160, 255)   # amber  — face detected, no match
@@ -95,22 +99,37 @@ class MoireDetector:
     """
 
     # Analysis size (square crop for consistent FFT)
-    ANALYZE_SIZE = 128
+    # Reduced from 128→64 for ~4x speedup with minimal accuracy loss
+    ANALYZE_SIZE = 64
 
     # Frequency band for moiré detection (normalized 0-1 of spectrum)
-    # Moiré typically appears in mid-to-high frequency range
     FREQ_LOW  = 0.15   # ignore DC + very low freq (face structure)
     FREQ_HIGH = 0.85   # ignore very high freq (noise)
 
     # Thresholds
-    PEAK_RATIO_THRESHOLD = 2.8    # ratio of peak to mean in target band
-    ENERGY_RATIO_THRESHOLD = 0.35 # high-freq energy ratio threshold
-    PERIODIC_THRESHOLD = 3.5      # periodicity score threshold
+    PEAK_RATIO_THRESHOLD = 2.8
+    ENERGY_RATIO_THRESHOLD = 0.35
+    PERIODIC_THRESHOLD = 3.5
 
     def __init__(self):
         self.history = []
         self.max_history = 20
         self.last_result = {}
+
+        # Pre-compute Hanning window and radial mask (avoid realloc per frame)
+        sz = self.ANALYZE_SIZE
+        self._window = np.outer(np.hanning(sz), np.hanning(sz)).astype(np.float32)
+        cy, cx = sz // 2, sz // 2
+        Y, X = np.ogrid[:sz, :sz]
+        self._dist = np.sqrt((X - cx)**2 + (Y - cy)**2).astype(np.float32)
+        max_r = min(cx, cy)
+        r_low = int(max_r * self.FREQ_LOW)
+        r_high = int(max_r * self.FREQ_HIGH)
+        self._band_mask = (self._dist >= r_low) & (self._dist <= r_high)
+        self._r_low = r_low
+        self._r_high = r_high
+        self._dc_mask = self._dist > 0
+        self._hf_mask = self._dist >= r_low
 
     def analyze(self, face_roi: np.ndarray) -> dict:
         """Analyze a face ROI for moiré patterns using FFT.
@@ -129,34 +148,18 @@ class MoireDetector:
         gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, (self.ANALYZE_SIZE, self.ANALYZE_SIZE))
 
-        # Normalize to float
-        gray_f = gray.astype(np.float32) / 255.0
-
-        # Apply window function to reduce spectral leakage
-        window = np.outer(np.hanning(self.ANALYZE_SIZE), np.hanning(self.ANALYZE_SIZE))
-        windowed = gray_f * window
+        # Normalize to float and apply pre-computed window
+        gray_f = gray.astype(np.float32) * (1.0 / 255.0)
+        windowed = gray_f * self._window
 
         # 2D FFT
         fft = np.fft.fft2(windowed)
         fft_shift = np.fft.fftshift(fft)
         magnitude = np.abs(fft_shift)
-
-        # Log magnitude for better dynamic range
         log_mag = np.log1p(magnitude)
 
-        # ── Signal 1: Peak-to-Mean ratio in target frequency band ──
-        h, w = log_mag.shape
-        cy, cx = h // 2, w // 2
-
-        # Create radial mask for target frequency band
-        Y, X = np.ogrid[:h, :w]
-        dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
-        max_r = min(cx, cy)
-        r_low = int(max_r * self.FREQ_LOW)
-        r_high = int(max_r * self.FREQ_HIGH)
-
-        band_mask = (dist >= r_low) & (dist <= r_high)
-        band_values = log_mag[band_mask]
+        # ── Signal 1: Peak-to-Mean ratio (use pre-computed mask) ──
+        band_values = log_mag[self._band_mask]
 
         if band_values.size == 0 or np.mean(band_values) < 1e-6:
             return {"moire_score": 0.5, "is_screen": None,
@@ -164,21 +167,19 @@ class MoireDetector:
 
         peak_ratio = float(np.max(band_values) / np.mean(band_values))
 
-        # ── Signal 2: High-frequency energy ratio ──────────────
-        # Screen images have more structured high-freq energy (pixel grid)
-        total_energy = np.sum(log_mag[dist > 0])
+        # ── Signal 2: High-frequency energy ratio (pre-computed masks) ──
+        total_energy = np.sum(log_mag[self._dc_mask])
         if total_energy < 1e-6:
             total_energy = 1e-6
-        high_freq_energy = np.sum(log_mag[dist >= r_low])
+        high_freq_energy = np.sum(log_mag[self._hf_mask])
         energy_ratio = float(high_freq_energy / total_energy)
 
         # ── Signal 3: Periodicity detection ────────────────────
-        # Moiré creates periodic peaks. Analyze angular spectrum for regularity.
-        # Sample along radial lines and check for periodic peaks
-        periodicity = self._check_periodicity(log_mag, cx, cy, r_low, r_high)
+        sz = self.ANALYZE_SIZE
+        cx, cy = sz // 2, sz // 2
+        periodicity = self._check_periodicity(log_mag, cx, cy, self._r_low, self._r_high)
 
         # ── Signal 4: Horizontal/Vertical line detection ───────
-        # Screen pixel grids create horizontal and vertical line artifacts
         h_line_score = self._check_grid_lines(gray, direction="horizontal")
         v_line_score = self._check_grid_lines(gray, direction="vertical")
         grid_score = (h_line_score + v_line_score) / 2.0
@@ -952,6 +953,8 @@ def main():
     moire_results = {}            # per face index
     current_mesh_landmarks = []   # latest FaceMesh results
     mesh_ts = 0                   # monotonic timestamp for MediaPipe
+    detect_cycle_count = 0        # counter for moiré frame skipping
+    has_faces = False             # track if faces were detected last cycle
 
     # Toggle states
     show_landmarks = True
@@ -962,6 +965,11 @@ def main():
     fps_counter = 0
     fps_start   = time.time()
     display_fps = 0.0
+
+    # Perf tracking
+    perf_detect_ms = 0.0
+    perf_moire_ms = 0.0
+    perf_mesh_ms = 0.0
 
     while True:
         ret, frame = cap.read()
@@ -977,8 +985,11 @@ def main():
         if liveness_tracker is not None:
             liveness_tracker.process_frame(frame)
 
-        # ── MediaPipe FaceMesh (EVERY frame for challenge) ──
-        if mesh_landmarker is not None:
+        # ── MediaPipe FaceMesh ───────────────────────────────
+        # Optimization: skip MediaPipe when no faces AND no active challenge
+        need_mesh = challenge.active or has_faces
+        if mesh_landmarker is not None and need_mesh:
+            t_mesh = time.time()
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             mesh_ts += 33
@@ -988,29 +999,35 @@ def main():
             except Exception as e:
                 print(f"[WARN] FaceMesh error: {e}")
                 current_mesh_landmarks = []
+            perf_mesh_ms = (time.time() - t_mesh) * 1000
 
             # ── Challenge-Response logic ────────────────
             if current_mesh_landmarks:
                 primary_face_lm = current_mesh_landmarks[0]
                 primary_moire = moire_results.get(0, {})
 
-                # Update active challenge
                 if challenge.active:
                     challenge.update(primary_face_lm, w_frame, h_frame)
-
-                # Check if we should trigger a new challenge
                 elif challenge.should_trigger(primary_moire):
                     challenge.start_challenge()
+        elif mesh_landmarker is not None:
+            # Keep timestamp advancing so MediaPipe doesn't complain
+            mesh_ts += 33
 
         # ── Face detection (throttled) ──────────────────────
         if now - last_detect_time >= detect_interval:
             last_detect_time = now
+            detect_cycle_count += 1
+            run_moire_this_cycle = (detect_cycle_count % MOIRE_EVERY_N_DETECT == 0)
+            t_detect = time.time()
             try:
                 engine._ensure_model()
                 raw_faces = engine._app.get(frame)
                 last_results = []
                 last_raw_faces = raw_faces
-                moire_results = {}
+                has_faces = len(raw_faces) > 0
+                if run_moire_this_cycle:
+                    moire_results = {}  # only clear when we re-analyze
 
                 for fi, raw_face in enumerate(raw_faces):
                     det_score = float(raw_face.det_score)
@@ -1031,10 +1048,15 @@ def main():
                            else np.array([]))
                     emb_dim = len(emb) if len(emb) > 0 else 0
 
-                    # ── Moiré analysis (NEW — passive) ──────
-                    face_roi = frame[max(0,y1):y2, max(0,x1):x2]
-                    mr = moire_detector.analyze(face_roi)
-                    moire_results[fi] = mr
+                    # ── Moiré analysis (every Nth cycle to save CPU) ──
+                    if run_moire_this_cycle:
+                        t_moire = time.time()
+                        face_roi = frame[max(0,y1):y2, max(0,x1):x2]
+                        mr = moire_detector.analyze(face_roi)
+                        moire_results[fi] = mr
+                        perf_moire_ms = (time.time() - t_moire) * 1000
+                    else:
+                        mr = moire_results.get(fi, moire_detector.last_result)
 
                     # Quality check
                     quality_info = None
@@ -1150,6 +1172,8 @@ def main():
 
                     last_results.append(entry)
 
+                perf_detect_ms = (time.time() - t_detect) * 1000
+
             except Exception as e:
                 print(f"Detect error: {e}")
                 import traceback
@@ -1189,6 +1213,10 @@ def main():
         total_students = len(db.get_all_students())
         draw_hud(frame, display_fps, len(last_results), total_students,
                  show_landmarks, show_info_panel, show_moire_overlay)
+
+        # ── Perf stats bar (below HUD) ───────────────────────
+        perf_txt = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  Mesh:{perf_mesh_ms:.0f}ms  Skip:{MOIRE_EVERY_N_DETECT-1}/{MOIRE_EVERY_N_DETECT}"
+        cv2.putText(frame, perf_txt, (14, 52), FONT, 0.32, C_DIM, 1, cv2.LINE_AA)
 
         # ── FPS calculation ─────────────────────────────────
         fps_counter += 1
