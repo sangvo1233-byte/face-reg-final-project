@@ -1,4 +1,4 @@
-"""
+﻿"""
 dev/enroll-v2.py — Multi-Angle + Multi-Frame Face Enrollment (V2)
 ==================================================================
 Đăng ký khuôn mặt với 3 góc (chính diện, trái, phải), mỗi góc lấy
@@ -894,14 +894,6 @@ def main():
     print("  Face Enrollment V2 — Multi-Angle + Multi-Frame")
     print("=" * 60)
 
-    student_id = input("Student ID   : ").strip()
-    name       = input("Full Name    : ").strip()
-    class_name = input("Class (opt)  : ").strip()
-
-    if not student_id or not name:
-        print("ERROR: ID and Name are required.")
-        sys.exit(1)
-
     print(f"\nLoading face engine...")
     engine = get_engine()
 
@@ -949,114 +941,191 @@ def main():
     cv2.moveWindow(WIN_NAME, win_x, win_y)
     print(f"Window: {win_w}x{win_h} @ ({win_x},{win_y})")
 
-    # ── Welcome screen ──────────────────────────────────
-    if not show_welcome_screen(cap, student_id, name, class_name, duration=3.0):
-        cap.release()
-        cv2.destroyAllWindows()
-        print("Cancelled by user.")
-        sys.exit(0)
+    # ═══════════════════════════════════════════════════
+    #  BATCH ENROLLMENT LOOP
+    # ═══════════════════════════════════════════════════
+    while True:
+        student_id = input("\nStudent ID   : ").strip()
+        name       = input("Full Name    : ").strip()
+        class_name = input("Class (opt)  : ").strip()
 
-    # ── Calibrate baseline ──────────────────────────────
-    baseline_nose_x, mesh_ts = show_calibration(cap, mesh_landmarker)
+        if not student_id or not name:
+            print("ERROR: ID and Name are required.")
+            continue
 
-    # ── Run 3 phases (with retry) ───────────────────────
-    phase_results = []
-    MAX_RETRIES = 1
-
-    for i, phase_info in enumerate(PHASES):
-        retries = 0
-        while True:
-            # Transition screen
-            show_transition(cap, i, phase_info, phase_results, student_id, name, class_name, duration=2.0)
-
-            # Run phase
-            result = run_phase(cap, engine, mesh_landmarker, i, phase_info, baseline_nose_x,
-                               phase_results, student_id, name, class_name)
-
-            if result is None:
-                cap.release()
-                cv2.destroyAllWindows()
-                print("\nEnrollment cancelled by user.")
-                sys.exit(0)
-
-            if not result["success"] and retries < MAX_RETRIES:
-                # Ask retry
-                retry = show_retry_prompt(cap, i, phase_info, result)
-                if retry:
-                    retries += 1
-                    continue  # retry this phase
-                else:
-                    phase_results.append(result)
-                    break
-            else:
-                phase_results.append(result)
+        # ── Enrollment retry loop (same student) ─────────
+        enrollment_done = False
+        while not enrollment_done:
+            if not show_welcome_screen(cap, student_id, name, class_name, duration=3.0):
+                print("Cancelled by user.")
+                enrollment_done = True
                 break
 
-    # ── Save to database ────────────────────────────────
-    successful_phases = [r for r in phase_results if r["success"] and r["embedding"] is not None]
+            baseline_nose_x, mesh_ts = show_calibration(cap, mesh_landmarker)
 
-    if len(successful_phases) == 0:
-        show_final_summary(cap, phase_results, student_id, name, 0, duration=4.0)
-        cap.release()
-        cv2.destroyAllWindows()
-        print("\nEnrollment FAILED — no phases succeeded.")
-        sys.exit(1)
+            phase_results = []
+            MAX_RETRIES = 1
+            cancelled = False
 
-    from core.database import get_db
-    db = get_db()
+            for i, phase_info in enumerate(PHASES):
+                retries = 0
+                while True:
+                    show_transition(cap, i, phase_info, phase_results,
+                                    student_id, name, class_name, duration=2.0)
+                    result = run_phase(cap, engine, mesh_landmarker, i, phase_info,
+                                       baseline_nose_x, phase_results, student_id, name, class_name)
+                    if result is None:
+                        cancelled = True
+                        break
+                    if not result["success"] and retries < MAX_RETRIES:
+                        retry = show_retry_prompt(cap, i, phase_info, result)
+                        if retry:
+                            retries += 1
+                            continue
+                        else:
+                            phase_results.append(result)
+                            break
+                    else:
+                        phase_results.append(result)
+                        break
+                if cancelled:
+                    break
 
-    db.add_student(student_id, name, class_name)
+            if cancelled:
+                print("\nEnrollment cancelled by user.")
+                enrollment_done = True
+                break
 
-    old_count = db.get_embedding_count(student_id)
-    if old_count > 0:
-        db.delete_embeddings(student_id)
-        print(f"Deleted {old_count} old embedding(s)")
+            # ── Save to database ────────────────────────
+            successful = [r for r in phase_results if r["success"] and r["embedding"] is not None]
 
-    saved = 0
-    for pr in successful_phases:
-        quality = pr.get("quality", 0.0)
-        source = f"v2_{pr['name'].lower()}"
-        db.save_embedding(student_id, pr["embedding"], quality, source)
-        saved += 1
-        print(f"  Saved: {source} ({pr['frame_count']} frames avg, quality={quality:.0f})")
+            if len(successful) == 0:
+                show_final_summary(cap, phase_results, student_id, name, 0, duration=3.0)
+                action = show_full_retry_prompt(cap, student_id, name,
+                    "All phases failed. No data saved.")
+                if action == "retry":
+                    continue  # retry same student
+                enrollment_done = True
+                print("\nEnrollment FAILED — no phases succeeded.")
+                break
 
-    # Save photo
-    try:
-        engine._ensure_model()
-        ret, frame = cap.read()
-        if ret:
-            face = engine.detect_largest(frame)
-            if face is not None and face.aligned_face is not None:
-                from datetime import datetime
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                photo_path = str(config.FACE_CROPS_DIR / f"{student_id}_{ts}.jpg")
-                cv2.imwrite(photo_path, face.aligned_face)
-                db.update_student(student_id, photo_path=photo_path)
-    except Exception:
-        pass
+            from core.database import get_db
+            db = get_db()
+            db.add_student(student_id, name, class_name)
 
-    engine.reload_cache()
+            old_count = db.get_embedding_count(student_id)
+            if old_count > 0:
+                db.delete_embeddings(student_id)
+                print(f"Deleted {old_count} old embedding(s)")
 
-    # ── Final summary screen ────────────────────────────
-    show_final_summary(cap, phase_results, student_id, name, saved, duration=5.0)
+            saved = 0
+            for pr in successful:
+                quality = pr.get("quality", 0.0)
+                source = f"v2_{pr['name'].lower()}"
+                db.save_embedding(student_id, pr["embedding"], quality, source)
+                saved += 1
+                print(f"  Saved: {source} ({pr['frame_count']} frames, quality={quality:.0f})")
+
+            try:
+                engine._ensure_model()
+                ret, frame = cap.read()
+                if ret:
+                    face = engine.detect_largest(frame)
+                    if face is not None and face.aligned_face is not None:
+                        from datetime import datetime
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        photo_path = str(config.FACE_CROPS_DIR / f"{student_id}_{ts}.jpg")
+                        cv2.imwrite(photo_path, face.aligned_face)
+                        db.update_student(student_id, photo_path=photo_path)
+            except Exception:
+                pass
+
+            engine.reload_cache()
+            show_final_summary(cap, phase_results, student_id, name, saved, duration=4.0)
+
+            # Offer retry if not all phases succeeded
+            if saved < len(PHASES):
+                action = show_full_retry_prompt(cap, student_id, name,
+                    f"Only {saved}/{len(PHASES)} angles saved. Re-enroll for all?")
+                if action == "retry":
+                    continue  # retry same student
+            enrollment_done = True
+
+            print(f"\n{'='*60}")
+            print(f"  Enrollment V2 complete: {name} ({student_id})")
+            print(f"{'='*60}")
+            for pr in phase_results:
+                status = "OK" if pr["success"] else "FAILED"
+                print(f"  {pr['name']:>8}: {status} ({pr['frame_count']} frames)")
+            print(f"  Total saved: {saved}/{len(PHASES)} embeddings")
+
+        # ── Next student ────────────────────────────────
+        print("\n" + "-" * 40)
+        next_input = input("Enroll another student? (Y/n): ").strip().lower()
+        if next_input in ('n', 'q', 'quit', 'exit'):
+            break
 
     cap.release()
     cv2.destroyAllWindows()
+    print("\nAll enrollment complete. Camera released.")
 
-    print(f"\n{'='*60}")
-    print(f"  Enrollment V2 complete: {name} ({student_id})")
-    print(f"{'='*60}")
-    for pr in phase_results:
-        status = "OK" if pr["success"] else "FAILED"
-        print(f"  {pr['name']:>8}: {status} ({pr['frame_count']} frames)")
-    print(f"  Total embeddings saved: {saved}")
-    print(f"  DB will average {saved} embeddings for matching.")
+
+def show_full_retry_prompt(cap, student_id, name, message):
+    """Show full retry/skip prompt after enrollment failure or partial success.
+    Returns 'retry' or 'skip'.
+    """
+    start = time.time()
+    duration = 8.0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        elapsed = time.time() - start
+        remaining = max(0, duration - elapsed)
+        draw_dark_overlay(frame, 0.6)
+        h, w = frame.shape[:2]
+
+        title = f"{name} ({student_id})"
+        t_size = cv2.getTextSize(title, FONT, 0.7, 1)[0]
+        cv2.putText(frame, title, ((w - t_size[0]) // 2, h // 2 - 80),
+                    FONT, 0.7, C_GOLD, 1, cv2.LINE_AA)
+
+        m_size = cv2.getTextSize(message, FONT_S, 0.55, 1)[0]
+        cv2.putText(frame, message, ((w - m_size[0]) // 2, h // 2 - 40),
+                    FONT_S, 0.55, C_ORANGE, 1, cv2.LINE_AA)
+
+        opts = [
+            ("R = RETRY enrollment (same student)", C_GREEN),
+            ("SPACE = SKIP to next student", C_DIM),
+        ]
+        y_base = h // 2 + 10
+        for oi, (txt, color) in enumerate(opts):
+            o_size = cv2.getTextSize(txt, FONT_S, 0.48, 1)[0]
+            cv2.putText(frame, txt, ((w - o_size[0]) // 2, y_base + oi * 35),
+                        FONT_S, 0.48, color, 1, cv2.LINE_AA)
+
+        timer_txt = f"Auto-skip in {remaining:.0f}s..."
+        cv2.putText(frame, timer_txt, ((w - 200) // 2, h // 2 + 110),
+                    FONT_S, 0.4, C_DIM, 1, cv2.LINE_AA)
+
+        cv2.imshow(WIN_NAME, frame)
+
+        if elapsed >= duration:
+            return "skip"
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('r'):
+            return "retry"
+        if key == ord(' ') or key == ord('q'):
+            return "skip"
 
 
 def show_retry_prompt(cap, phase_idx, phase_info, result):
-    """Show retry prompt when a phase fails. Returns True if user wants retry."""
+    """Show retry prompt when a phase fails. Returns True to retry."""
     start = time.time()
-    duration = 5.0  # auto-skip after 5s
+    duration = 5.0
 
     while True:
         ret, frame = cap.read()
@@ -1068,7 +1137,6 @@ def show_retry_prompt(cap, phase_idx, phase_info, result):
         draw_dark_overlay(frame, 0.5)
         h, w = frame.shape[:2]
 
-        # Warning
         warn = f"Phase {phase_idx+1} FAILED"
         w_size = cv2.getTextSize(warn, FONT, 0.8, 2)[0]
         cv2.putText(frame, warn, ((w - w_size[0]) // 2, h // 2 - 50),
@@ -1079,7 +1147,6 @@ def show_retry_prompt(cap, phase_idx, phase_info, result):
         cv2.putText(frame, detail, ((w - d_size[0]) // 2, h // 2 - 15),
                     FONT, 0.5, C_ORANGE, 1, cv2.LINE_AA)
 
-        # Options
         opt1 = "Press R to RETRY this phase"
         opt2 = "Press SPACE or wait to SKIP"
         o1_size = cv2.getTextSize(opt1, FONT, 0.5, 1)[0]
@@ -1095,14 +1162,15 @@ def show_retry_prompt(cap, phase_idx, phase_info, result):
         cv2.imshow(WIN_NAME, frame)
 
         if elapsed >= duration:
-            return False  # auto-skip
+            return False
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('r'):
-            return True   # retry
+            return True
         if key == ord(' ') or key == ord('q'):
-            return False  # skip
+            return False
 
 
 if __name__ == "__main__":
     main()
+
