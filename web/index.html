@@ -74,14 +74,14 @@
                     <button class="btn-primary" id="btn-start" onclick="uiStartSession()">
                         <span class="material-symbols-outlined">play_arrow</span>Start
                     </button>
-                    <button class="btn-danger-fill" id="btn-stop" onclick="uiEndSession()" style="display:none">
+                    <button class="btn-danger-fill hidden-initial" id="btn-stop" onclick="uiEndSession()">
                         <span class="material-symbols-outlined">stop</span>End Session
                     </button>
                 </div>
             </div>
 
             <!-- End Session Summary Card -->
-            <div class="lumina-card summary-card" id="end-session-summary" style="display:none">
+            <div class="lumina-card summary-card hidden-initial" id="end-session-summary">
                 <div class="flex-row justify-between mb-2">
                     <h3 class="enroll-title">Session Summary</h3>
                     <button class="btn-ghost" onclick="hideSummary()">Close</button>
@@ -101,6 +101,11 @@
                         <span class="autoscan-status-text" id="autoscan-status">Waiting...</span>
                         <span class="autoscan-count-text" id="autoscan-count">0 scanned</span>
                     </div>
+                    <div class="popup-test-bar">
+                        <span class="popup-test-label">Popup test</span>
+                        <button class="btn-secondary btn-compact" onclick="testAttendanceSuccessOverlay('present')">Test Present</button>
+                        <button class="btn-secondary btn-compact" onclick="testAttendanceSuccessOverlay('already')">Test Already</button>
+                    </div>
 
                     <div class="viewfinder">
                         <img id="camera-feed" src="/api/live/stream" alt="Camera" crossorigin="anonymous">
@@ -118,11 +123,64 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="attendance-success-overlay hidden-initial" id="attendance-success-overlay" aria-live="polite">
+                            <div class="attendance-success-backdrop"></div>
+                            <div class="attendance-success-card">
+                                <div class="attendance-success-header">
+                                    <div class="attendance-success-status">
+                                        <span class="attendance-success-chip" id="success-status-chip">PRESENT</span>
+                                    </div>
+                                    <span class="attendance-success-countdown" id="success-countdown-number">3</span>
+                                    <span class="attendance-success-time" id="success-timestamp">--:--:--</span>
+                                </div>
+                                <div class="attendance-success-body">
+                                    <div class="attendance-success-photo-wrap">
+                                        <img class="attendance-success-photo" id="success-face-img" alt="Attendance evidence">
+                                    </div>
+                                    <div class="attendance-success-copy">
+                                        <h2 class="attendance-success-title" id="success-title">Attendance Recorded</h2>
+                                        <p class="attendance-success-subtitle" id="success-subtitle">Saved to attendance log</p>
+                                        <div class="attendance-success-info">
+                                            <p class="attendance-success-name" id="success-student-name">--</p>
+                                            <p class="attendance-success-meta" id="success-student-meta">--</p>
+                                            <p class="attendance-success-session" id="success-session-name">--</p>
+                                        </div>
+                                        <div class="attendance-success-footer">
+                                            <span id="success-confidence">Confidence: --</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="attendance-success-actions">
+                                    <button class="attendance-skip-btn" id="attendance-skip-btn" type="button" onclick="skipAttendanceSuccessOverlay()">Skip</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="scan-challenge-overlay hidden-initial" id="scan-challenge-overlay" aria-live="polite">
+                            <div class="scan-challenge-backdrop"></div>
+                            <div class="scan-challenge-card">
+                                <div class="scan-challenge-header">
+                                    <span class="scan-challenge-chip">VERIFY IDENTITY</span>
+                                    <span class="scan-challenge-countdown" id="scan-challenge-countdown">3</span>
+                                </div>
+                                <div class="scan-challenge-action" id="scan-challenge-action">
+                                    <span class="material-symbols-outlined scan-challenge-face">face</span>
+                                    <span class="material-symbols-outlined scan-challenge-arrow" id="scan-challenge-arrow">arrow_back</span>
+                                </div>
+                                <div class="scan-challenge-body">
+                                    <h2 class="scan-challenge-title" id="scan-challenge-title">Follow the prompt</h2>
+                                    <p class="scan-challenge-instruction" id="scan-challenge-instruction">Turn your face as instructed</p>
+                                    <p class="scan-challenge-status" id="scan-challenge-status">Preparing camera frames...</p>
+                                    <div class="scan-challenge-progress">
+                                        <span id="scan-challenge-progress-bar"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 <div class="flex-col">
-                    <div class="scan-result-card" id="result-card" style="display:none">
+                    <div class="scan-result-card hidden-initial" id="result-card">
                         <span class="material-symbols-outlined result-icon" id="result-icon">check_circle</span>
                         <div>
                             <p class="result-name" id="result-name">--</p>
@@ -164,7 +222,7 @@
                 </button>
             </div>
 
-            <div class="lumina-card flex-row justify-between mb-4" style="padding:16px">
+            <div class="lumina-card flex-row justify-between mb-4 p-16">
                 <div class="view-tabs" id="student-view-tabs">
                     <button class="view-tab active" onclick="loadStudents('active')">Active</button>
                     <button class="view-tab" onclick="loadStudents('archived')">Archived</button>
@@ -172,7 +230,7 @@
                 </div>
             </div>
 
-            <div class="lumina-card" style="overflow:hidden">
+            <div class="lumina-card overflow-hidden">
                 <table class="data-table">
                     <thead>
                         <tr>
@@ -196,7 +254,7 @@
                 <h2 class="section-title">Attendance History</h2>
                 <p class="section-subtitle">Review past attendance sessions</p>
             </div>
-            <div class="lumina-card" style="overflow:hidden">
+            <div class="lumina-card overflow-hidden">
                 <table class="data-table">
                     <thead>
                         <tr>
@@ -224,14 +282,14 @@
                 <div class="detail-grid">
                     <div>
                         <h4 class="detail-section-title present">
-                            <span class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1">check_circle</span>
+                            <span class="material-symbols-outlined icon-sm-filled">check_circle</span>
                             Present (<span id="detail-present-count">0</span>)
                         </h4>
                         <ul id="detail-present-list" class="detail-list"></ul>
                     </div>
                     <div>
                         <h4 class="detail-section-title absent">
-                            <span class="material-symbols-outlined" style="font-size:16px">cancel</span>
+                            <span class="material-symbols-outlined icon-sm">cancel</span>
                             Absent (<span id="detail-absent-count">0</span>)
                         </h4>
                         <ul id="detail-absent-list" class="detail-list"></ul>
@@ -247,17 +305,17 @@
                 <p class="section-subtitle">Configure camera &amp; system</p>
             </div>
             <div class="flex-col settings-max">
-                <div class="lumina-card" style="overflow:hidden">
+                <div class="lumina-card settings-card">
                     <div class="settings-card-header">
                         <span class="material-symbols-outlined">videocam</span>
                         <h3>Camera Source</h3>
                     </div>
                     <div class="settings-card-body">
                         <div class="source-row">
-                            <button class="source-btn active" id="src-webcam" onclick="setCameraSource('webcam')"><span class="material-symbols-outlined nav-icon">videocam</span>Server Webcam</button>
-                            <button class="source-btn" id="src-browser" onclick="setCameraSource('browser')"><span class="material-symbols-outlined nav-icon">camera</span>Browser Camera</button>
-                            <button class="source-btn" id="src-phone" onclick="setCameraSource('phone')"><span class="material-symbols-outlined nav-icon">smartphone</span>Phone</button>
-                            <button class="btn-demo" id="btn-demo" onclick="toggleDemoVideo()"><span class="material-symbols-outlined nav-icon">play_circle</span><span id="btn-demo-label">Demo</span></button>
+                            <button class="source-btn active" id="src-webcam" onclick="setCameraSource('webcam')"><span class="material-symbols-outlined source-btn-icon">videocam</span>Server Webcam</button>
+                            <button class="source-btn" id="src-browser" onclick="setCameraSource('browser')"><span class="material-symbols-outlined source-btn-icon">camera</span>Browser Camera</button>
+                            <button class="source-btn" id="src-phone" onclick="setCameraSource('phone')"><span class="material-symbols-outlined source-btn-icon">smartphone</span>Phone</button>
+                            <button class="btn-demo" id="btn-demo" onclick="toggleDemoVideo()"><span class="material-symbols-outlined source-btn-icon">play_circle</span><span id="btn-demo-label">Demo</span></button>
                             <span class="phone-status" id="phone-status"><span class="dot off" id="phone-dot"></span><span id="phone-status-text">Not connected</span></span>
                         </div>
                         <div class="interval-row">
@@ -270,7 +328,7 @@
                         </div>
                         <div class="source-info" id="source-info-card">
                             <div class="source-info-row">
-                                <span class="material-symbols-outlined" style="color:var(--primary-container)">sensors</span>
+                                <span class="material-symbols-outlined source-info-icon">sensors</span>
                                 <div>
                                     <p class="source-info-label">Active Source</p>
                                     <p class="source-info-value" id="source-info-text">Server Webcam (MJPEG Stream)</p>
@@ -280,9 +338,9 @@
                         </div>
                     </div>
                 </div>
-                <div class="lumina-card" style="padding:20px">
+                <div class="lumina-card settings-system-card">
                     <h3 class="system-section-label">System</h3>
-                    <div class="flex-row" style="gap:10px;flex-wrap:wrap">
+                    <div class="settings-actions">
                         <button class="btn-secondary" onclick="location.reload()"><span class="material-symbols-outlined">refresh</span>Reload Page</button>
                     </div>
                 </div>
@@ -312,11 +370,11 @@
                     <label class="form-label">Class</label>
                     <input type="text" class="form-input" id="new-student-class" placeholder="12A1">
                 </div>
-                <div class="mt-4" style="border-top:1px solid var(--outline-variant);padding-top:16px">
+                <div class="mt-4 create-method-divider">
                     <p class="form-label">Select Enrollment Method</p>
                     <div class="flex-row">
-                        <button class="btn-primary" onclick="proceedToCameraEnroll()" style="flex:1;justify-content:center"><span class="material-symbols-outlined">camera</span>Camera Captures</button>
-                        <button class="btn-secondary" onclick="proceedToManualEnroll()" style="flex:1;justify-content:center"><span class="material-symbols-outlined">upload_file</span>File Upload</button>
+                        <button class="btn-primary flex-fill-center" onclick="proceedToCameraEnroll()"><span class="material-symbols-outlined">camera</span>Camera Captures</button>
+                        <button class="btn-secondary flex-fill-center" onclick="proceedToManualEnroll()"><span class="material-symbols-outlined">upload_file</span>File Upload</button>
                     </div>
                 </div>
             </div>
@@ -325,22 +383,27 @@
 
     <!-- Enroll Camera Modal -->
     <div class="lumina-modal-overlay" id="enroll-modal">
-        <div class="lumina-modal" style="width:95%;max-width:800px">
+        <div class="lumina-modal enroll-modal">
             <div class="modal-header">
                 <h3>Enroll Face (Camera)</h3>
                 <button class="modal-close" onclick="closeEnrollCameraModal()"><span class="material-symbols-outlined">close</span></button>
             </div>
             <div class="modal-body">
                 <div class="flex-row justify-between mb-4">
-                    <div class="flex-col" style="gap:4px">
+                    <div class="flex-col gap-xs">
                         <p class="enroll-title" id="enroll-cam-title">--</p>
                         <p class="enroll-subtitle" id="enroll-cam-subtitle">--</p>
                     </div>
-                    <div class="flex-row" style="gap:6px" id="enroll-steps"></div>
+                    <div class="flex-row gap-sm" id="enroll-steps"></div>
                 </div>
                 <div class="enroll-grid">
                     <div class="cam-container">
                         <video id="enroll-camera" class="cam-video" autoplay playsinline muted></video>
+                        <div class="pose-guide" id="enroll-pose-guide">
+                            <span class="material-symbols-outlined pose-guide-face">face</span>
+                            <span class="material-symbols-outlined pose-guide-arrow" id="enroll-pose-arrow">arrow_upward</span>
+                        </div>
+                        <div class="auto-capture-status" id="enroll-auto-status">Auto capture is checking your face...</div>
                         <div class="cam-instruction">
                             <p class="cam-instr-text" id="enroll-instruction">Loading camera...</p>
                         </div>
@@ -348,23 +411,23 @@
                     </div>
                     <div class="flex-col">
                         <div class="thumb-card" id="thumb-card-front" onclick="retakeAngle('front')">
-                            <div class="thumb-placeholder"><span class="material-symbols-outlined">face</span><p class="thumb-label">FRONT</p></div>
+                            <div class="thumb-placeholder"><span class="thumb-pose-icon"><span class="material-symbols-outlined thumb-face-icon">face</span><span class="material-symbols-outlined thumb-arrow-icon">arrow_upward</span></span><p class="thumb-label">FRONT</p></div>
                             <img class="thumb-img" id="thumb-img-front">
                             <div class="thumb-overlay"><span class="material-symbols-outlined">refresh</span><p>Retake</p></div>
-                            <div class="thumb-check"><span class="material-symbols-outlined" style="font-size:14px">check</span></div>
+                            <div class="thumb-check"><span class="material-symbols-outlined icon-xs">check</span></div>
                         </div>
                         <div class="thumb-side-row">
                             <div class="thumb-card" id="thumb-card-left" onclick="retakeAngle('left')">
-                                <div class="thumb-placeholder"><span class="material-symbols-outlined" style="transform:rotateY(30deg)">face</span><p class="thumb-label">LEFT</p></div>
+                                <div class="thumb-placeholder"><span class="thumb-pose-icon"><span class="material-symbols-outlined thumb-face-icon">face</span><span class="material-symbols-outlined thumb-arrow-icon">arrow_back</span></span><p class="thumb-label">LEFT</p></div>
                                 <img class="thumb-img" id="thumb-img-left">
                                 <div class="thumb-overlay"><span class="material-symbols-outlined">refresh</span><p>Retake</p></div>
-                                <div class="thumb-check"><span class="material-symbols-outlined" style="font-size:14px">check</span></div>
+                                <div class="thumb-check"><span class="material-symbols-outlined icon-xs">check</span></div>
                             </div>
                             <div class="thumb-card" id="thumb-card-right" onclick="retakeAngle('right')">
-                                <div class="thumb-placeholder"><span class="material-symbols-outlined" style="transform:rotateY(-30deg)">face</span><p class="thumb-label">RIGHT</p></div>
+                                <div class="thumb-placeholder"><span class="thumb-pose-icon"><span class="material-symbols-outlined thumb-face-icon">face</span><span class="material-symbols-outlined thumb-arrow-icon">arrow_forward</span></span><p class="thumb-label">RIGHT</p></div>
                                 <img class="thumb-img" id="thumb-img-right">
                                 <div class="thumb-overlay"><span class="material-symbols-outlined">refresh</span><p>Retake</p></div>
-                                <div class="thumb-check"><span class="material-symbols-outlined" style="font-size:14px">check</span></div>
+                                <div class="thumb-check"><span class="material-symbols-outlined icon-xs">check</span></div>
                             </div>
                         </div>
                         <div class="capture-wrap">
@@ -388,7 +451,7 @@
                 <button class="modal-close" onclick="closeModal('manual-enroll-modal')"><span class="material-symbols-outlined">close</span></button>
             </div>
             <div class="modal-body">
-                <div class="flex-col mb-4" style="gap:4px">
+                <div class="flex-col mb-4 gap-xs">
                     <p class="enroll-title" id="manual-enroll-title">Student Name</p>
                     <p class="enroll-subtitle" id="manual-enroll-subtitle">ID: --</p>
                 </div>
@@ -426,19 +489,19 @@
                 </div>
             </div>
             <div class="modal-body">
-                <div class="flex-row mb-4" style="align-items:flex-start">
-                    <img id="detail-photo" class="scan-avatar detail-photo" onerror="this.src=''">
-                    <div class="flex-col" style="gap:4px">
+                <div class="flex-row mb-4 align-start">
+                    <img id="detail-photo" class="scan-avatar detail-photo" alt="Student photo">
+                    <div class="flex-col gap-xs">
                         <h2 class="detail-name" id="detail-name">Name</h2>
                         <p class="detail-meta" id="detail-id">ID: --</p>
                         <p class="detail-meta" id="detail-class">Class: --</p>
                     </div>
                 </div>
-                <div class="lumina-card" style="padding:16px">
+                <div class="lumina-card p-16">
                     <h4 class="form-label">Face Embeddings</h4>
                     <p class="detail-body-text" id="detail-embeddings">0 reference angles recorded</p>
                 </div>
-                <div class="lumina-card mt-4" style="padding:16px">
+                <div class="lumina-card mt-4 p-16">
                     <h4 class="form-label">Recent History</h4>
                     <div class="custom-scrollbar detail-history-scroll" id="detail-history-list"></div>
                 </div>
@@ -476,9 +539,9 @@
     </div>
 
     <!-- Confirm Dialog -->
-    <div class="lumina-modal-overlay" id="confirm-dialog" style="z-index:2000">
-        <div class="lumina-modal" style="width:90%;max-width:400px">
-            <div class="modal-body text-center" style="padding-top:32px">
+    <div class="lumina-modal-overlay z-confirm" id="confirm-dialog">
+        <div class="lumina-modal confirm-modal">
+            <div class="modal-body text-center confirm-body">
                 <div class="confirm-icon warning" id="confirm-icon"><span class="material-symbols-outlined" id="confirm-icon-sym">warning</span></div>
                 <h3 class="confirm-title" id="confirm-title">Confirm</h3>
                 <p class="confirm-msg" id="confirm-msg">Are you sure?</p>
@@ -499,6 +562,6 @@
         <p class="loading-text" id="loading-text">Processing...</p>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>
