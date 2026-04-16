@@ -4,6 +4,9 @@ Computer Vision Share/
 # Pre-trained model files (too large for GitHub — download separately)
 models/
 
+# Dev scripts (local research only — not for production)
+dev/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -25,24 +28,20 @@ env/
 database/*.db
 database/*.db-shm
 database/*.db-wal
+database/backups/
 
 # Logs & runtime artifacts
 logs/evidence/
 logs/face_crops/
+logs/evidence_archived_*/
 logs/*.log
 *.log
 
 # Tunnel
 tunnel_log*.txt
 
-# Models (nếu quá lớn — download riêng)
-# models/         # bỏ comment dòng này nếu model > 100MB
-
 # Web demo video (lớn, share qua drive)
 web/demo.mp4
-
-# Screenshots dev
-dev/screenshots/
 
 # OS
 .DS_Store
@@ -60,3 +59,6 @@ desktop.ini
 
 # Cloudflared
 *.bat.log
+
+# Pytest temp cache
+pytest-cache-files-*/
