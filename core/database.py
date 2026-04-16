@@ -125,18 +125,43 @@ class Database:
         conn.close()
         return dict(row) if row else None
 
-    def get_all_students(self, active_only: bool = True) -> list[dict]:
+    def get_student_any(self, student_id: str) -> dict | None:
+        """Return student regardless of is_active status (for archived views)."""
         conn = self._conn()
-        query = "SELECT * FROM students"
-        if active_only:
-            query += " WHERE is_active = 1"
-        query += " ORDER BY name"
+        row = conn.execute(
+            "SELECT * FROM students WHERE id = ?", (student_id,)
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def get_all_students(self, active_only: bool = True,
+                         archived_only: bool = False) -> list[dict]:
+        conn = self._conn()
+        if archived_only:
+            query = "SELECT * FROM students WHERE is_active = 0 ORDER BY name"
+        elif active_only:
+            query = "SELECT * FROM students WHERE is_active = 1 ORDER BY name"
+        else:
+            query = "SELECT * FROM students ORDER BY name"
         rows = conn.execute(query).fetchall()
         conn.close()
         return [dict(r) for r in rows]
 
     def delete_student(self, student_id: str) -> bool:
         return self.update_student(student_id, is_active=0)
+
+    def restore_student(self, student_id: str) -> bool:
+        """Restore a soft-deleted student back to active."""
+        conn = self._conn()
+        c = conn.execute(
+            "UPDATE students SET is_active = 1 WHERE id = ? AND is_active = 0",
+            (student_id,)
+        )
+        conn.commit()
+        conn.close()
+        if c.rowcount > 0:
+            logger.info(f"Student restored: {student_id}")
+        return c.rowcount > 0
 
     def get_student_count(self) -> int:
         conn = self._conn()

@@ -1,481 +1,916 @@
-/**
- * Face Attendance - Frontend JS
- */
-function $(sel) { return document.querySelector(sel); }
-function $$(sel) { return document.querySelectorAll(sel); }
+/* =========================================================================
+   LUMIN OS — Face Attendance SPA
+   Phase 5, 6, 7 Refactored
+   ========================================================================= */
 
-function toast(msg, type = 'info') {
-    const t = document.createElement('div');
-    t.className = `toast toast-${type}`;
-    t.textContent = msg;
-    $('#toast-container').appendChild(t);
-    setTimeout(() => t.remove(), 4000);
-}
-function showLoading(text) { $('#loading-text').textContent = text || 'Processing...'; $('#loading').style.display = 'flex'; }
-function hideLoading() { $('#loading').style.display = 'none'; }
-async function api(url, opts = {}) {
-    const res = await fetch(url, opts);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+// --- Global State ---
+let currentTheme = localStorage.getItem('theme') || 'light';
+let isAutoScanning = false;
+let autoScanInterval;
+let scanIntervalMs = 2500;
+let lastFrameTime = 0;
+let scanCount = 0;
+let presentSet = new Set();
+let sessionActive = false;
+let sessionStats = { total:0, present:0, absent:0 };
+let currentView = 'active'; // Students view state
+
+// Enrollment State
+const ENROLL_PHASES = ['front', 'left', 'right'];
+let enrollState = {
+    id: null, name: null, className: null,
+    stream: null, currentPhase: 0, 
+    captures: { front: null, left: null, right: null }
+};
+
+// --- Initialization ---
+document.addEventListener('DOMContentLoaded', () => {
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    setupTabs();
+    updateClock();
+    setInterval(updateClock, 1000);
+    checkSessionStatus();
+    loadStudents('active');
+    loadHistory();
+});
+
+// --- UI / Theme / Modals ---
+function toggleTheme() {
+    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    localStorage.setItem('theme', currentTheme);
 }
 
-// Clock
 function updateClock() {
     const now = new Date();
-    $('#clock').textContent = now.toLocaleString('en-US');
+    document.getElementById('clock').textContent = now.toLocaleTimeString('en-US', { hour12: false });
 }
-setInterval(updateClock, 1000); updateClock();
 
-// Sidebar Nav
-$$('.nav-item').forEach(item => {
-    item.addEventListener('click', (e) => {
-        e.preventDefault();
-        $$('.nav-item').forEach(t => t.classList.remove('active'));
-        $$('.tab-content').forEach(c => c.classList.remove('active'));
-        item.classList.add('active');
-        $(`#tab-${item.dataset.tab}`).classList.add('active');
-        if (item.dataset.tab === 'students') loadStudents();
-        if (item.dataset.tab === 'history') loadSessions();
+function showToast(msg, type = 'info') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    const bg = type === 'error' ? 'var(--error)' : type === 'success' ? 'var(--primary)' : 'var(--tertiary)';
+    const color = type === 'error' ? 'var(--on-error)' : 'var(--on-primary)';
+    toast.style = `background:${bg};color:${color};padding:12px 20px;border-radius:var(--radius-md);font-weight:600;font-size:0.875rem;box-shadow:var(--shadow-elevated);animation:toastIn 0.3s cubic-bezier(0.16,1,0.3,1)`;
+    toast.innerHTML = `<style>@keyframes toastIn{from{opacity:0;transform:translateX(100%)}to{opacity:1;transform:translateX(0)}}</style>${msg}`;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+function showLoading(text='Processing...') {
+    document.getElementById('loading-text').textContent = text;
+    document.getElementById('loading').style.display = 'flex';
+}
+function hideLoading() {
+    document.getElementById('loading').style.display = 'none';
+}
+
+function showModal(id) {
+    const m = document.getElementById(id);
+    m.style.display = 'flex';
+}
+function closeModal(id) {
+    document.getElementById(id).style.display = 'none';
+}
+
+function confirmDialog(title, msg, type = 'warning') {
+    return new Promise(resolve => {
+        const d = document.getElementById('confirm-dialog');
+        document.getElementById('confirm-title').textContent = title;
+        document.getElementById('confirm-msg').textContent = msg;
+        const iconContainer = document.getElementById('confirm-icon');
+        const iconSym = document.getElementById('confirm-icon-sym');
+        
+        iconContainer.className = `confirm-icon ${type}`;
+        iconSym.textContent = type === 'warning' ? 'warning' : type === 'error' ? 'error' : 'info';
+
+        d.style.display = 'flex';
+        
+        const btnOk = document.getElementById('confirm-ok');
+        const btnCancel = document.getElementById('confirm-cancel');
+        
+        const cleanup = () => {
+            d.style.display = 'none';
+            btnOk.removeEventListener('click', onOk);
+            btnCancel.removeEventListener('click', onCancel);
+        };
+        
+        const onOk = () => { cleanup(); resolve(true); };
+        const onCancel = () => { cleanup(); resolve(false); };
+        
+        btnOk.addEventListener('click', onOk);
+        btnCancel.addEventListener('click', onCancel);
     });
-});
-
-// Status
-async function checkStatus() {
-    try {
-        const data = await api('/api/system/status');
-        const b = $('#status-badge');
-        const dot = $('#header-dot');
-        b.className = 'status-badge ok';
-        b.textContent = `${data.students} students`;
-        if (dot) { dot.classList.remove('bg-outline'); dot.classList.add('bg-secondary'); dot.style.boxShadow = '0 0 8px rgba(123,219,128,0.5)'; }
-    } catch {
-        $('#status-badge').className = 'status-badge';
-        $('#status-badge').textContent = 'Disconnected';
-        const dot = $('#header-dot');
-        if (dot) { dot.classList.add('bg-outline'); dot.classList.remove('bg-secondary'); dot.style.boxShadow = 'none'; }
-    }
 }
-checkStatus(); setInterval(checkStatus, 15000);
 
-// ── SESSION ────────────────────────────────────────────────
-let activeSession = null;
+function setupTabs() {
+    document.querySelectorAll('.nav-item').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+        });
+    });
+}
 
-async function refreshSession() {
+// --- Session Management (Phase 7) ---
+
+async function checkSessionStatus() {
     try {
-        const data = await api('/api/session/active');
+        const res = await fetch('/api/session/active');
+        const data = await res.json();
+        const headerStatus = document.getElementById('status-badge');
+        const headerDot = document.getElementById('header-dot');
+        const dot = document.querySelector('#session-info .dot');
+        const txt = document.querySelector('#session-info span:not(.dot)');
+        const input = document.getElementById('session-name');
+        
         if (data.active) {
-            activeSession = data.session;
-            $('#session-info').innerHTML = `<span class="dot on"></span><span><strong>${activeSession.name}</strong> — ${activeSession.present_count}/${activeSession.total_students} present</span>`;
-            $('#btn-start').style.display = 'none'; $('#session-name').style.display = 'none';
-            $('#btn-stop').style.display = 'inline-block'; $('#btn-scan').disabled = false;
+            sessionActive = true;
+            const sess = data.session;
+            headerStatus.textContent = "Session Active";
+            headerDot.className = "status-badge-dot on";
+            dot.className = "dot on";
+            txt.textContent = sess.name || "Active Session";
+            input.style.display = 'none';
+            document.getElementById('btn-start').style.display = 'none';
+            document.getElementById('btn-stop').style.display = 'inline-flex';
+            checkAutoScanStatus();
         } else {
-            activeSession = null;
-            $('#session-info').innerHTML = `<span class="dot off"></span><span>No active session</span>`;
-            $('#btn-start').style.display = 'inline-block'; $('#session-name').style.display = 'inline-block';
-            $('#btn-stop').style.display = 'none'; $('#btn-scan').disabled = true;
+            sessionActive = false;
+            headerStatus.textContent = "Idle";
+            headerDot.className = "status-badge-dot";
+            dot.className = "dot off";
+            txt.textContent = "No active session";
+            input.style.display = 'block';
+            document.getElementById('btn-start').style.display = 'inline-flex';
+            document.getElementById('btn-stop').style.display = 'none';
+            stopAutoScan();
         }
-    } catch { }
+    } catch (e) { console.error("Status check failed", e); }
 }
 
-async function startSession() {
-    const name = $('#session-name').value.trim() || `Session ${new Date().toLocaleDateString('en-US')}`;
+async function uiStartSession() {
+    const input = document.getElementById('session-name');
+    const name = input.value.trim() || `Class_${new Date().toLocaleDateString().replace(/\//g,'-')}`;
+    
+    const d = await confirmDialog("Start New Session", `Begin attendance session: ${name}?`, "info");
+    if (!d) return;
+
+    showLoading('Starting session...');
     try {
-        const r = await api('/api/session/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
-        toast(r.message, r.success ? 'success' : 'error');
-        refreshSession(); refreshAttendance();
-    } catch (e) { toast(e.message, 'error'); }
-}
-
-async function endSession() {
-    if (!confirm('End this session?')) return;
-    try {
-        const r = await api('/api/session/end', { method: 'POST' });
-        toast(r.message, r.success ? 'success' : 'error');
-        refreshSession(); refreshAttendance();
-    } catch (e) { toast(e.message, 'error'); }
-}
-
-// ── CAMERA SOURCE ──────────────────────────────────────────
-let cameraSource = 'webcam'; // 'webcam' | 'phone'
-let phoneStatusInterval = null;
-let demoVideoActive = false;
-
-function setCameraSource(src) {
-    // If demo video is active, stop it first
-    if (demoVideoActive) toggleDemoVideo();
-    cameraSource = src;
-    const feed = $('#camera-feed');
-    const webcamBtn = $('#src-webcam');
-    const phoneBtn = $('#src-phone');
-    const phoneStatus = $('#phone-status');
-
-    webcamBtn.classList.toggle('active', src === 'webcam');
-    phoneBtn.classList.toggle('active', src === 'phone');
-
-    if (src === 'phone') {
-        feed.src = '/api/live/phone-stream';
-        phoneStatus.style.display = 'inline-flex';
-        $('#camera-hint').textContent = 'Phone Camera — Open /phone on your mobile';
-        startPhoneStatusPolling();
-    } else {
-        feed.src = '/api/live/stream';
-        phoneStatus.style.display = 'none';
-        $('#camera-hint').textContent = 'Webcam — Position face in frame';
-        stopPhoneStatusPolling();
-    }
-}
-
-// ── DEMO VIDEO MODE ─────────────────────────────────────────
-
-let demoScanInterval = null;
-
-function toggleDemoVideo() {
-    const feed = $('#camera-feed');
-    const vid = $('#demo-video');
-    const btn = $('#btn-demo');
-    const label = $('#btn-demo-label');
-    const hint = $('#camera-hint');
-
-    demoVideoActive = !demoVideoActive;
-
-    if (demoVideoActive) {
-        // Show video, hide camera img stream
-        feed.style.display = 'none';
-        vid.style.display = 'block';
-        vid.currentTime = 0;
-        vid.play();
-
-        // Style button active (amber)
-        btn.classList.remove('border-[#8b5cf6]/30', 'bg-[#8b5cf6]/10', 'text-[#c4b5fd]');
-        btn.classList.add('border-yellow-500/50', 'bg-yellow-500/20', 'text-yellow-300');
-        label.textContent = 'Stop Demo';
-        hint.textContent = 'Demo Video — Auto scanning...';
-
-        // AUTO-SCAN: capture a frame every 1.2s and POST to /api/scan
-        let foundFaceInDemo = false;
-        demoScanInterval = setInterval(async () => {
-            if (!activeSession || !demoVideoActive) return;
-            if (foundFaceInDemo) return; // stop after first recognition
-            try {
-                const c = document.createElement('canvas');
-                c.width = vid.videoWidth || 1280;
-                c.height = vid.videoHeight || 720;
-                c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
-                const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
-                const fd = new FormData();
-                fd.append('image', blob, 'frame.jpg');
-                const result = await api('/api/scan', { method: 'POST', body: fd });
-                if (result.results && result.results.length > 0) {
-                    const r = result.results[0];
-                    if (r.status === 'present' || r.status === 'already') {
-                        foundFaceInDemo = true;
-                        showScanResult(r);
-                        const msg = r.status === 'present' ? 'Marked present!' : 'Already marked';
-                        toast(`✓ ${r.name} — ${msg}`, 'success');
-                        hint.textContent = `Recognized: ${r.name}`;
-                        refreshSession(); refreshAttendance();
-                    }
-                }
-            } catch { /* ignore individual scan errors */ }
-        }, 1200);
-
-    } else {
-        // Stop auto-scan
-        if (demoScanInterval) { clearInterval(demoScanInterval); demoScanInterval = null; }
-
-        // Restore camera stream
-        vid.pause();
-        vid.style.display = 'none';
-        feed.style.display = 'block';
-        feed.src = (cameraSource === 'phone') ? '/api/live/phone-stream' : '/api/live/stream';
-
-        // Restore button style
-        btn.classList.remove('border-yellow-500/50', 'bg-yellow-500/20', 'text-yellow-300');
-        btn.classList.add('border-[#8b5cf6]/30', 'bg-[#8b5cf6]/10', 'text-[#c4b5fd]');
-        label.textContent = 'Demo';
-        hint.textContent = (cameraSource === 'phone')
-            ? 'Phone Camera — Open /phone on your mobile'
-            : 'Webcam — Position face in frame';
-    }
-}
-
-function startPhoneStatusPolling() {
-    stopPhoneStatusPolling();
-    checkPhoneStatus();
-    phoneStatusInterval = setInterval(checkPhoneStatus, 3000);
-}
-
-function stopPhoneStatusPolling() {
-    if (phoneStatusInterval) { clearInterval(phoneStatusInterval); phoneStatusInterval = null; }
-}
-
-async function checkPhoneStatus() {
-    try {
-        const data = await api('/api/phone/status');
-        const dot = $('#phone-dot');
-        const text = $('#phone-status-text');
-        if (data.connected) {
-            dot.className = 'dot on';
-            text.textContent = 'Connected';
-        } else {
-            dot.className = 'dot off';
-            text.textContent = 'Not connected';
-        }
-    } catch { }
-}
-
-// ── SCAN ───────────────────────────────────────────────────
-async function doScan() {
-    if (!activeSession) { toast('No active session', 'error'); return; }
-    showLoading('Scanning...');
-    try {
-        let blob;
-        if (demoVideoActive) {
-            // Capture current frame from the demo <video> element
-            const vid = $('#demo-video');
-            const c = document.createElement('canvas');
-            c.width = vid.videoWidth || 1280;
-            c.height = vid.videoHeight || 720;
-            c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
-            blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
-        } else if (cameraSource === 'phone') {
-            // Fetch latest frame from phone camera buffer
-            const resp = await fetch('/api/phone/latest');
-            if (!resp.ok || resp.status === 204) {
-                hideLoading();
-                toast('No frame from phone camera', 'error');
-                return;
-            }
-            blob = await resp.blob();
-        } else {
-            // Capture from MJPEG img element
-            const img = $('#camera-feed');
-            const c = document.createElement('canvas');
-            c.width = img.naturalWidth || 640; c.height = img.naturalHeight || 480;
-            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-            blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
-        }
-
-        const fd = new FormData(); fd.append('image', blob, 'frame.jpg');
-        const result = await api('/api/scan', { method: 'POST', body: fd });
+        const res = await fetch('/api/session/start', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name })
+        });
+        const data = await res.json();
         hideLoading();
-        if (result.results && result.results.length > 0) {
-            const r = result.results[0];
-            showScanResult(r);
-            toast(`${r.name} — ${r.message}`, r.status === 'present' ? 'success' : 'info');
+        if (data.success) {
+            showToast('Session Started', 'success');
+            presentSet.clear();
+            scanCount = 0;
+            updateScanLogs();
+            document.getElementById('end-session-summary').style.display = 'none';
+            checkSessionStatus();
+            setCameraSource('webcam'); // Start auto scan through default
         } else {
-            showScanResult({ name: '---', message: 'No face detected', status: 'none' });
-            toast('No face detected', 'error');
+            showToast(data.message, 'error');
         }
-        refreshSession(); refreshAttendance();
-    } catch (e) { hideLoading(); toast(e.message, 'error'); }
+    } catch (e) { hideLoading(); showToast('Error starting session', 'error'); }
 }
 
-function showScanResult(r) {
-    $('#result-card').style.display = 'block';
-    $('#result-name').textContent = r.name || '---';
-    $('#result-msg').textContent = r.message || '';
-}
+async function uiEndSession() {
+    const d = await confirmDialog("End Session", "Are you sure you want to end the current attendance session?", "warning");
+    if (!d) return;
 
-async function refreshAttendance() {
+    showLoading('Ending session...');
     try {
-        const data = await api('/api/session/attendance');
-        if (!data.active) {
-            $('#present-count').textContent = '0 / 0';
-            $('#present-list').innerHTML = '<p class="empty text-center py-8">No active session</p>';
-            updateProgress(0, 0);
-            return;
-        }
-        const result = data.result;
-        $('#present-count').textContent = `${result.present_count} / ${result.total}`;
-        updateProgress(result.present_count, result.total);
-        if (!data.attendance.length) {
-            $('#present-list').innerHTML = '<p class="empty text-center py-8">No attendance yet</p>';
-            return;
-        }
-        $('#present-list').innerHTML = data.attendance.map(a => {
-            const t = new Date(a.scanned_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            const initials = a.student_name.split(' ').slice(-2).map(w => w[0]).join('').toUpperCase();
-            const sid = a.student_id || '';
-            return `<div class="present-item">
-                <div class="avatar">${initials}</div>
-                <div class="present-item-info">
-                    <div class="name">${a.student_name}</div>
-                    <div class="id">ID: ${sid}</div>
-                </div>
-                <div class="time-col">
-                    <div class="time">${t}</div>
-                    <span class="status-pill"><span class="pip"></span>Present</span>
-                </div>
-            </div>`;
-        }).join('');
-    } catch { }
+        const res = await fetch('/api/session/end', { method: 'POST' });
+        const data = await res.json();
+        hideLoading();
+        if (data.success) {
+            showToast('Session Ended', 'success');
+            document.getElementById('summary-total').textContent = data.total;
+            document.getElementById('summary-present').textContent = data.present;
+            document.getElementById('summary-absent').textContent = data.absent;
+            document.getElementById('end-session-summary').style.display = 'block';
+            
+            checkSessionStatus();
+            loadHistory();
+        } else { showToast(data.message, 'error'); }
+    } catch (e) { hideLoading(); showToast('Error ending session', 'error'); }
 }
 
-function updateProgress(present, total) {
-    const pct = total > 0 ? Math.round((present / total) * 100) : 0;
-    const pctEl = $('#progress-pct');
-    const barEl = $('#progress-bar');
-    if (pctEl) pctEl.textContent = `${pct}%`;
-    if (barEl) barEl.style.width = `${pct}%`;
+function hideSummary() { document.getElementById('end-session-summary').style.display = 'none'; }
+
+
+// --- Students CRUD & Filter (Phase 6) ---
+
+function setStudentView(view) {
+    currentView = view;
+    // update buttons state natively in HTML onclicks, this just triggers load
+    loadStudents(view);
 }
 
-// ── STUDENTS ───────────────────────────────────────────────
-function showEnrollForm() { $('#enroll-form').style.display = 'block'; }
-function hideEnrollForm() { $('#enroll-form').style.display = 'none'; $('#enroll-result').textContent = ''; }
+async function loadStudents(view) {
+    try {
+        const res = await fetch(`/api/students?view=${view}`);
+        const data = await res.json();
+        const tbody = document.getElementById('student-tbody');
+        tbody.innerHTML = '';
+        if (!data.students || data.students.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="empty-state">No students found in this view.</td></tr>`;
+            return;
+        }
 
-async function submitEnroll() {
-    const id = $('#enroll-id').value.trim(), name = $('#enroll-name').value.trim();
-    const cls = $('#enroll-class').value.trim(), photo = $('#enroll-photo');
-    if (!id || !name) { toast('Enter student ID and name', 'error'); return; }
-    if (!photo.files.length) { toast('Select a photo', 'error'); return; }
-    showLoading('Enrolling...');
+        data.students.forEach(s => {
+            const tr = document.createElement('tr');
+            tr.style.borderBottom = '1px solid var(--outline-variant)';
+            
+            const isActive = s.is_active !== 0;
+            const statusClass = isActive ? 'active' : 'archived';
+            const statusText = isActive ? 'Active' : 'Archived';
+            
+            tr.innerHTML = `
+                <td style="padding:12px 16px;font-weight:600;color:var(--on-surface)">${s.id}</td>
+                <td style="padding:12px 16px;display:flex;align-items:center;gap:10px">
+                    <img src="/api/students/${s.id}/photo" onerror="this.style.display='none'" style="width:32px;height:32px;border-radius:50%;background:var(--surface-container-high);object-fit:cover">
+                    <span style="font-weight:600;color:var(--on-surface)">${s.name}</span>
+                </td>
+                <td style="padding:12px 16px;color:var(--on-surface-variant)">${s.class_name || '--'}</td>
+                <td style="padding:12px 16px;text-align:center"><span class="status-chip ${statusClass}">${statusText}</span></td>
+                <td style="padding:12px 16px">
+                    <div class="action-cell">
+                        <button class="btn-icon view" title="View Profile" onclick="showStudentDetail('${s.id}')"><span class="material-symbols-outlined" style="font-size:18px">visibility</span></button>
+                        ${isActive ? `
+                            <button class="btn-icon edit" title="Edit Metadata" onclick="openEditModal('${s.id}')"><span class="material-symbols-outlined" style="font-size:18px">edit</span></button>
+                            <button class="btn-icon enroll" title="Re-enroll Face" onclick="startReEnroll('${s.id}', '${s.name}', '${s.class_name}')"><span class="material-symbols-outlined" style="font-size:18px">face</span></button>
+                            <button class="btn-icon archive" title="Archive Student" onclick="archiveStudent('${s.id}')"><span class="material-symbols-outlined" style="font-size:18px">archive</span></button>
+                        ` : `
+                            <button class="btn-icon restore" title="Restore Student" onclick="restoreStudent('${s.id}')"><span class="material-symbols-outlined" style="font-size:18px">restore_from_trash</span></button>
+                        `}
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+        
+        // Setup view tabs styling dynamically
+        document.querySelectorAll('.view-tab').forEach(b => {
+            b.classList.remove('active');
+            if(b.textContent.toLowerCase() === view.toLowerCase()) b.classList.add('active');
+        });
+        currentView = view;
+    } catch (e) { console.error("Load students error", e); }
+}
+
+async function archiveStudent(id) {
+    const d = await confirmDialog("Archive Student", `Are you sure you want to archive student ${id}? Their attendance will not be recorded while archived.`, "error");
+    if (!d) return;
+
+    showLoading('Archiving...');
+    try {
+        const res = await fetch(`/api/students/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        hideLoading();
+        if (data.success) { showToast('Student archived', 'success'); loadStudents(currentView); }
+        else showToast('Error archiving', 'error');
+    } catch(e) { hideLoading(); showToast('Network error', 'error'); }
+}
+
+async function restoreStudent(id) {
+    const d = await confirmDialog("Restore Student", `Re-activate student ${id}?`, "info");
+    if (!d) return;
+
+    showLoading('Restoring...');
+    try {
+        const res = await fetch(`/api/students/${id}/restore`, { method: 'POST' });
+        const data = await res.json();
+        hideLoading();
+        if (data.success) { showToast('Student restored', 'success'); loadStudents(currentView); }
+        else showToast(data.message || 'Error', 'error');
+    } catch(e) { hideLoading(); showToast('Network error', 'error'); }
+}
+
+async function showStudentDetail(id) {
+    showLoading();
+    try {
+        const res = await fetch(`/api/students/${id}`);
+        const data = await res.json();
+        hideLoading();
+        
+        const s = data.student;
+        document.getElementById('detail-photo').src = `/api/students/${id}/photo?t=${Date.now()}`;
+        document.getElementById('detail-name').textContent = s.name;
+        document.getElementById('detail-id').textContent = `ID: ${s.id}`;
+        document.getElementById('detail-class').textContent = `Class: ${s.class_name || '--'}`;
+        document.getElementById('detail-embeddings').textContent = `${data.embedding_count || 0} reference angles recorded.`;
+        
+        const status = document.getElementById('detail-status');
+        status.textContent = s.is_active === 0 ? "ARCHIVED" : "ACTIVE";
+        status.className = s.is_active === 0 ? "status-chip archived" : "status-chip active";
+
+        const hist = document.getElementById('detail-history-list');
+        hist.innerHTML = '';
+        if (!data.history || data.history.length === 0) {
+            hist.innerHTML = '<p class="empty-state">No attendance history</p>';
+        } else {
+            data.history.forEach(h => {
+                const el = document.createElement('div');
+                el.style = "padding:8px 12px;border-bottom:1px solid var(--outline-variant);display:flex;justify-content:space-between;align-items:center";
+                el.innerHTML = `
+                    <div><p style="font-weight:600;color:var(--on-surface)">${h.session_name || 'Session ' + h.session_id}</p><p style="font-size:0.75rem;color:var(--on-surface-variant)">${new Date(h.timestamp).toLocaleString()}</p></div>
+                    <span class="status-chip ${h.status==='Present'?'active':'archived'}">${h.status}</span>
+                `;
+                hist.appendChild(el);
+            });
+        }
+        showModal('student-detail-modal');
+    } catch(e) { hideLoading(); showToast("Error loading details", "error"); }
+}
+
+function openEditModal(id) {
+    fetch(`/api/students/${id}`).then(r => r.json()).then(data => {
+        const s = data.student;
+        document.getElementById('edit-student-id').value = s.id;
+        document.getElementById('edit-student-id-display').value = s.id;
+        document.getElementById('edit-student-name').value = s.name;
+        document.getElementById('edit-student-class').value = s.class_name || '';
+        showModal('student-edit-modal');
+    }).catch(e => showToast("Error loading student", "error"));
+}
+
+async function saveStudentEdit() {
+    const id = document.getElementById('edit-student-id').value;
+    const name = document.getElementById('edit-student-name').value;
+    const cls = document.getElementById('edit-student-class').value;
+    
+    showLoading();
+    try {
+        const res = await fetch(`/api/students/${id}`, {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name: name, class_name: cls})
+        });
+        hideLoading();
+        if ((await res.json()).success) {
+            showToast("Student metadata updated", "success");
+            closeModal('student-edit-modal');
+            loadStudents(currentView);
+        } else {
+            showToast("Update failed", "error");
+        }
+    } catch(e) { hideLoading(); showToast("Network error", "error"); }
+}
+
+
+// --- Face Enrollment System (Phase 5) ---
+
+function showStudentCreateModal() {
+    document.getElementById('new-student-id').value = '';
+    document.getElementById('new-student-name').value = '';
+    document.getElementById('new-student-class').value = '';
+    showModal('student-create-modal');
+}
+
+function validateNewStudentForm() {
+    const id = document.getElementById('new-student-id').value.trim();
+    const name = document.getElementById('new-student-name').value.trim();
+    if(!id || !name) { showToast("ID and Name are required", "error"); return null; }
+    return {id, name, class: document.getElementById('new-student-class').value.trim()};
+}
+
+function startReEnroll(id, name, cls) {
+    enrollState.id = id; enrollState.name = name; enrollState.className = cls;
+    document.getElementById('new-student-id').value = id;
+    document.getElementById('new-student-name').value = name;
+    document.getElementById('new-student-class').value = cls;
+    showModal('student-create-modal');
+}
+
+function proceedToCameraEnroll() {
+    const s = validateNewStudentForm();
+    if (!s) return;
+    enrollState = { ...s, currentPhase: 0, stream: null, captures: {front:null, left:null, right:null} };
+    closeModal('student-create-modal');
+    document.getElementById('enroll-cam-title').textContent = enrollState.name;
+    document.getElementById('enroll-cam-subtitle').textContent = `ID: ${enrollState.id}`;
+    
+    // Reset cards
+    ENROLL_PHASES.forEach(p => {
+        const c = document.getElementById(`thumb-card-${p}`);
+        c.className = 'thumb-card';
+        c.querySelector('.thumb-check').style.display = 'none';
+        c.querySelector('.thumb-placeholder').style.display = 'flex';
+        c.querySelector('.thumb-placeholder').classList.remove('error');
+        c.querySelector('.thumb-img').style.display = 'none';
+    });
+    
+    document.getElementById('enroll-submit-btn').disabled = true;
+    showModal('enroll-modal');
+    startEnrollCamera();
+    updateEnrollUI();
+}
+
+async function startEnrollCamera() {
+    try {
+        const video = document.getElementById('enroll-camera');
+        enrollState.stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+        video.srcObject = enrollState.stream;
+    } catch(e) {
+        document.getElementById('enroll-instruction').textContent = "Camera access denied or failed.";
+        document.getElementById('enroll-instruction').style.color = 'var(--error)';
+    }
+}
+
+function stopEnrollCamera() {
+    if (enrollState.stream) {
+        enrollState.stream.getTracks().forEach(t => t.stop());
+        enrollState.stream = null;
+    }
+}
+
+function closeEnrollCameraModal() {
+    stopEnrollCamera();
+    closeModal('enroll-modal');
+}
+
+function updateEnrollUI() {
+    const phase = ENROLL_PHASES[enrollState.currentPhase];
+    if (!phase) { // All done
+        document.getElementById('enroll-capture-btn').disabled = true;
+        document.getElementById('enroll-submit-btn').disabled = false;
+        document.getElementById('enroll-instruction').textContent = "All angles verified! Click Save Enrollment.";
+        return;
+    }
+    document.getElementById('enroll-capture-btn').disabled = false;
+    document.getElementById('enroll-submit-btn').disabled = true;
+    document.getElementById('enroll-instruction').textContent = `Look ${phase.toUpperCase()} and capture`;
+    
+    ENROLL_PHASES.forEach((p, idx) => {
+        const card = document.getElementById(`thumb-card-${p}`);
+        if(idx === enrollState.currentPhase) card.classList.add('active');
+        else card.classList.remove('active');
+    });
+}
+
+function retakeAngle(angle) {
+    if(document.getElementById('enroll-submit-btn').disabled === false) {
+        document.getElementById('enroll-submit-btn').disabled = true; // Needs to complete
+    }
+    const idx = ENROLL_PHASES.indexOf(angle);
+    if(idx === -1) return;
+    enrollState.currentPhase = idx;
+    enrollState.captures[angle] = null;
+    const card = document.getElementById(`thumb-card-${angle}`);
+    card.className = 'thumb-card active';
+    card.querySelector('.thumb-img').style.display = 'none';
+    card.querySelector('.thumb-check').style.display = 'none';
+    card.querySelector('.thumb-placeholder').style.display = 'flex';
+    card.querySelector('.thumb-placeholder').classList.remove('error');
+    updateEnrollUI();
+}
+
+function flashCamera() {
+    const fl = document.getElementById('enroll-flash');
+    fl.style.opacity = '1';
+    setTimeout(() => fl.style.opacity = '0', 100);
+}
+
+async function captureEnrollFrame() {
+    if(!enrollState.stream) return;
+    flashCamera();
+    
+    const video = document.getElementById('enroll-camera');
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.95));
+    
+    const phase = ENROLL_PHASES[enrollState.currentPhase];
+    
+    // Set preview
+    const imgUrl = URL.createObjectURL(blob);
+    enrollState.captures[phase] = blob;
+    
+    const card = document.getElementById(`thumb-card-${phase}`);
+    const imgEl = card.querySelector('.thumb-img');
+    imgEl.src = imgUrl; imgEl.style.display = 'block';
+    card.classList.add('has-img');
+    card.querySelector('.thumb-placeholder').style.display = 'none';
+    
+    // Validate with backend
+    card.querySelector('.thumb-overlay p').textContent = "VALIDATING...";
+    document.getElementById('enroll-capture-btn').disabled = true;
+    
     const fd = new FormData();
-    fd.append('student_id', id); fd.append('name', name); fd.append('class_name', cls);
-    fd.append('image', photo.files[0]);
+    fd.append('angle', phase);
+    fd.append('image', blob, 'capture.jpg');
+    
     try {
-        const r = await api('/api/enroll', { method: 'POST', body: fd }); hideLoading();
-        const el = $('#enroll-result');
-        el.className = r.success ? 'success' : 'error';
-        el.textContent = r.message;
-        if (r.success) { toast('Enrolled successfully', 'success'); loadStudents(); checkStatus(); }
-    } catch (e) { hideLoading(); toast(e.message, 'error'); }
-}
-
-async function loadStudents() {
-    try {
-        const data = await api('/api/students');
-        const tb = $('#student-tbody'), ss = data.students || [];
-        if (!ss.length) { tb.innerHTML = '<tr><td colspan="5" class="empty">No students</td></tr>'; return; }
-        tb.innerHTML = ss.map(s => {
-            const d = s.enrolled_at ? new Date(s.enrolled_at).toLocaleDateString('en-US') : '--';
-            return `<tr><td><strong>${s.id}</strong></td><td>${s.name}</td><td>${s.class_name || '--'}</td><td>${d}</td><td><button class="btn btn-danger" onclick="deleteStudent('${s.id}','${s.name}')">Delete</button></td></tr>`;
-        }).join('');
-    } catch (e) { $('#student-tbody').innerHTML = `<tr><td colspan="5" class="empty">${e.message}</td></tr>`; }
-}
-
-async function deleteStudent(id, name) {
-    if (!confirm(`Delete ${name}?`)) return;
-    try { await api(`/api/students/${id}`, { method: 'DELETE' }); toast(`Deleted ${name}`, 'success'); loadStudents(); checkStatus(); }
-    catch (e) { toast(e.message, 'error'); }
-}
-
-// ── HISTORY ────────────────────────────────────────────────
-async function loadSessions() {
-    try {
-        const data = await api('/api/sessions');
-        const tb = $('#history-tbody'), ss = data.sessions || [];
-        if (!ss.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">No sessions</td></tr>'; return; }
-        tb.innerHTML = ss.map(s => {
-            const t = new Date(s.created_at).toLocaleString('en-US');
-            const badge = s.status === 'active' ? '<span class="badge badge-active">Active</span>' : '<span class="badge badge-ended">Ended</span>';
-            return `<tr><td>${s.id}</td><td><strong>${s.name}</strong></td><td>${t}</td><td>${s.present_count}</td><td>${s.absent_count}</td><td>${badge}</td><td><button class="btn btn-detail" onclick="showSessionDetail(${s.id})">View</button></td></tr>`;
-        }).join('');
-    } catch (e) { $('#history-tbody').innerHTML = `<tr><td colspan="7" class="empty">${e.message}</td></tr>`; }
-}
-
-async function showSessionDetail(sid) {
-    try {
-        const data = await api(`/api/session/${sid}/result`);
-        $('#detail-panel').style.display = 'block';
-        $('#detail-title').textContent = data.session.name;
-        const r = data.result;
-        $('#detail-present-count').textContent = r.present_count;
-        $('#detail-absent-count').textContent = r.absent_count;
-        $('#detail-present-list').innerHTML = r.present.map(s => `<li>${s.name} (${s.id})</li>`).join('') || '<li class="empty">None</li>';
-        $('#detail-absent-list').innerHTML = r.absent.map(s => `<li>${s.name} (${s.id})</li>`).join('') || '<li class="empty">None</li>';
-    } catch (e) { toast(e.message, 'error'); }
-}
-function hideDetail() { $('#detail-panel').style.display = 'none'; }
-
-// Init
-refreshSession(); refreshAttendance(); setInterval(refreshAttendance, 10000);
-
-// ── DEMO SLIDESHOW ─────────────────────────────────────────
-let demoSlide = 0;
-const DEMO_TOTAL = 5;
-let demoAutoTimer = null;
-
-function openDemo() {
-    demoSlide = 0;
-    $('#demo-overlay').style.display = 'flex';
-    buildDemoDots();
-    updateDemoSlide();
-    // Auto-advance every 8s
-    startDemoAuto();
-    document.addEventListener('keydown', demoKeyHandler);
-}
-
-function closeDemo() {
-    $('#demo-overlay').style.display = 'none';
-    stopDemoAuto();
-    document.removeEventListener('keydown', demoKeyHandler);
-}
-
-function demoNav(dir) {
-    demoSlide = Math.max(0, Math.min(DEMO_TOTAL - 1, demoSlide + dir));
-    updateDemoSlide();
-    stopDemoAuto();
-}
-
-function demoGoTo(idx) {
-    demoSlide = idx;
-    updateDemoSlide();
-    stopDemoAuto();
-}
-
-function updateDemoSlide() {
-    $$('.demo-slide').forEach((s, i) => {
-        s.classList.toggle('active', i === demoSlide);
-    });
-    $$('#demo-dots .demo-dot').forEach((d, i) => {
-        d.classList.toggle('active', i === demoSlide);
-    });
-    $('#demo-counter').textContent = `${demoSlide + 1} / ${DEMO_TOTAL}`;
-    $('#demo-prev').disabled = demoSlide === 0;
-    if (demoSlide === DEMO_TOTAL - 1) {
-        $('#demo-next').textContent = 'Close';
-        $('#demo-next').onclick = closeDemo;
-    } else {
-        $('#demo-next').textContent = 'Next';
-        $('#demo-next').onclick = () => demoNav(1);
-    }
-}
-
-function buildDemoDots() {
-    const container = $('#demo-dots');
-    container.innerHTML = '';
-    for (let i = 0; i < DEMO_TOTAL; i++) {
-        const dot = document.createElement('span');
-        dot.className = 'demo-dot' + (i === 0 ? ' active' : '');
-        dot.onclick = () => demoGoTo(i);
-        container.appendChild(dot);
-    }
-}
-
-function startDemoAuto() {
-    stopDemoAuto();
-    demoAutoTimer = setInterval(() => {
-        if (demoSlide < DEMO_TOTAL - 1) {
-            demoSlide++;
-            updateDemoSlide();
+        const res = await fetch('/api/enroll/v2/validate', { method: 'POST', body: fd });
+        const data = await res.json();
+        if(data.success) {
+            card.classList.remove('error'); card.classList.add('success');
+            card.querySelector('.thumb-check').style.display = 'flex';
+            card.querySelector('.thumb-overlay p').textContent = "RETAKE";
+            
+            // Advance phase implicitly
+            enrollState.currentPhase++;
+            while(enrollState.currentPhase < 3 && enrollState.captures[ENROLL_PHASES[enrollState.currentPhase]]) {
+                enrollState.currentPhase++;
+            }
         } else {
-            stopDemoAuto();
+            card.classList.add('error');
+            card.querySelector('.thumb-overlay p').textContent = "FAILED: " + data.reason;
+            card.querySelector('.thumb-placeholder').classList.add('error');
+            showToast(data.reason, "error");
         }
-    }, 8000);
+    } catch(e) {
+        showToast("Validation request failed", "error");
+    }
+    updateEnrollUI();
 }
 
-function stopDemoAuto() {
-    if (demoAutoTimer) { clearInterval(demoAutoTimer); demoAutoTimer = null; }
+// Manual Upload Flow
+let manualValidated = { front: false, left: false, right: false };
+
+function proceedToManualEnroll() {
+    const s = validateNewStudentForm();
+    if(!s) return;
+    enrollState = { ...s };
+    manualValidated = { front: false, left: false, right: false };
+    closeModal('student-create-modal');
+    document.getElementById('manual-enroll-title').textContent = enrollState.name;
+    document.getElementById('manual-enroll-subtitle').textContent = `ID: ${enrollState.id}`;
+    document.getElementById('manual-front').value = '';
+    document.getElementById('manual-left').value = '';
+    document.getElementById('manual-right').value = '';
+    ['front','left','right'].forEach(a => {
+        const el = document.getElementById(`manual-${a}-err`);
+        el.style.display = 'none'; el.textContent = '';
+    });
+    document.getElementById('manual-enroll-submit').disabled = true;
+    showModal('manual-enroll-modal');
 }
 
-function demoKeyHandler(e) {
-    if (e.key === 'ArrowRight') demoNav(1);
-    else if (e.key === 'ArrowLeft') demoNav(-1);
-    else if (e.key === 'Escape') closeDemo();
+function checkManualReady() {
+    document.getElementById('manual-enroll-submit').disabled =
+        !(manualValidated.front && manualValidated.left && manualValidated.right);
 }
 
-// Close on overlay click
-document.addEventListener('click', (e) => {
-    if (e.target.id === 'demo-overlay') closeDemo();
-});
+async function validateManualFile(angle) {
+    const input = document.getElementById(`manual-${angle}`);
+    const errEl = document.getElementById(`manual-${angle}-err`);
+    const file = input.files[0];
+    if(!file) { manualValidated[angle] = false; checkManualReady(); return; }
+
+    errEl.textContent = 'Validating...'; errEl.style.display = 'block'; errEl.style.color = 'var(--on-surface-variant)';
+    manualValidated[angle] = false;
+    checkManualReady();
+
+    const fd = new FormData();
+    fd.append('angle', angle);
+    fd.append('image', file);
+    try {
+        const res = await fetch('/api/enroll/v2/validate', { method: 'POST', body: fd });
+        const data = await res.json();
+        if(data.success) {
+            manualValidated[angle] = true;
+            errEl.textContent = `\u2713 Valid (quality: ${Math.round(data.quality || 0)})`;
+            errEl.style.color = 'var(--primary)';
+        } else {
+            manualValidated[angle] = false;
+            errEl.textContent = `\u2717 ${data.reason}`;
+            errEl.style.color = 'var(--error)';
+        }
+    } catch(e) {
+        manualValidated[angle] = false;
+        errEl.textContent = 'Validation request failed';
+        errEl.style.color = 'var(--error)';
+    }
+    errEl.style.display = 'block';
+    checkManualReady();
+}
+
+// Final Submission API call
+async function submitEnroll(isManual = false) {
+    const fd = new FormData();
+    fd.append('student_id', enrollState.id);
+    fd.append('name', enrollState.name);
+    fd.append('class_name', enrollState.class || '');
+    
+    if (isManual) {
+        fd.append('image_front', document.getElementById('manual-front').files[0]);
+        fd.append('image_left', document.getElementById('manual-left').files[0]);
+        fd.append('image_right', document.getElementById('manual-right').files[0]);
+    } else {
+        if(!enrollState.captures.front || !enrollState.captures.left || !enrollState.captures.right) {
+            return showToast("All angles required", "error");
+        }
+        fd.append('image_front', enrollState.captures.front, 'front.jpg');
+        fd.append('image_left', enrollState.captures.left, 'left.jpg');
+        fd.append('image_right', enrollState.captures.right, 'right.jpg');
+    }
+    
+    showLoading("Generating Encodings...");
+    try {
+        const res = await fetch('/api/enroll/v2', { method: 'POST', body: fd });
+        const data = await res.json();
+        hideLoading();
+        
+        if (data.success) {
+            showToast("Enrollment Saved Successfully!", "success");
+            if (isManual) closeModal('manual-enroll-modal');
+            else closeEnrollCameraModal();
+            loadStudents(currentView);
+        } else {
+            showToast(data.message || "Enrollment failed", "error");
+            if(data.phase_results) {
+                // Show specific failures
+                const errs = data.phase_results.filter(r => !r.success).map(r => `${r.name}: ${r.reason}`).join(" | ");
+                if(errs) showToast(errs, "error");
+            }
+        }
+    } catch(e) { hideLoading(); showToast("Network error submitting enrollment", "error"); }
+}
+
+// --- History View ---
+async function loadHistory() {
+    try {
+        const res = await fetch('/api/sessions');
+        const data = await res.json();
+        const tbody = document.getElementById('history-tbody');
+        tbody.innerHTML = '';
+        if(!data.sessions || data.sessions.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No history recorded</td></tr>`;
+            return;
+        }
+        
+        data.sessions.forEach((s, i) => {
+            const tr = document.createElement('tr');
+            tr.style.borderBottom = '1px solid var(--outline-variant)';
+            const isActive = s.status === 'active';
+            const stClass = isActive ? 'active' : 'archived';
+            const stText = isActive ? 'Active' : 'Closed';
+            
+            tr.innerHTML = `
+                <td style="padding:12px 16px;color:var(--on-surface-variant)">${i+1}</td>
+                <td style="padding:12px 16px;font-weight:600;color:var(--on-surface)">${s.name || 'Session ' + s.id}</td>
+                <td style="padding:12px 16px;color:var(--on-surface-variant)">${new Date(s.created_at).toLocaleString()}</td>
+                <td style="padding:12px 16px;color:var(--primary);font-weight:600">${s.present_count || 0}</td>
+                <td style="padding:12px 16px;color:var(--error);font-weight:600">${s.absent_count || 0}</td>
+                <td style="padding:12px 16px"><span class="status-chip ${stClass}">${stText}</span></td>
+                <td style="padding:12px 16px;text-align:right">
+                    <button class="btn-secondary" style="padding:6px 12px;font-size:0.75rem" onclick="showHistoryDetail(${s.id})">Details</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (e) { console.error(e); }
+}
+
+async function showHistoryDetail(id) {
+    const panel = document.getElementById('detail-panel');
+    panel.style.display = 'block';
+    panel.scrollIntoView({behavior: 'smooth'});
+    // Basic implementation since we lack a deep detail endpoint, we will load history
+    document.getElementById('detail-present-count').textContent = '--';
+    document.getElementById('detail-absent-count').textContent = '--';
+}
+
+function hideDetail() { document.getElementById('detail-panel').style.display = 'none'; }
+
+
+// --- Scan V3 Detection Flow (Phase 7) ---
+
+let cameraSource = 'webcam';
+let localStream = null;
+
+async function setCameraSource(source) {
+    document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(`src-${source}`).classList.add('active');
+    
+    cameraSource = source;
+    isAutoScanning = false;
+    updateAutoScanUI();
+    
+    const feed = document.getElementById('camera-feed');
+    const browserCam = document.getElementById('browser-cam');
+    
+    if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+    }
+    
+    if (source === 'browser') {
+        feed.style.display = 'none';
+        browserCam.style.display = 'block';
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({video: true});
+            browserCam.srcObject = localStream;
+            document.getElementById('source-info-text').textContent = 'Local Browser Camera';
+            if(sessionActive) startAutoScan();
+        } catch(e) {
+            showToast("Camera access denied", "error");
+            setCameraSource('webcam');
+        }
+    } else if (source === 'phone') {
+        feed.style.display = 'none';
+        browserCam.style.display = 'none';
+        document.getElementById('source-info-text').textContent = 'Android Phone Camera';
+        // Connect via socket mechanism handled dynamically in backend
+    } else {
+        feed.style.display = 'block';
+        browserCam.style.display = 'none';
+        document.getElementById('source-info-text').textContent = 'Server Webcam Stream';
+        if(sessionActive) startAutoScan();
+    }
+}
+
+function updateAutoScanInterval() {
+    scanIntervalMs = parseInt(document.getElementById('autoscan-interval').value);
+    if (isAutoScanning) { stopAutoScan(); startAutoScan(); }
+}
+
+async function checkAutoScanStatus() {
+    if (sessionActive && !isAutoScanning && cameraSource !== 'phone') {
+        startAutoScan();
+    }
+}
+
+function updateAutoScanUI() {
+    const bar = document.getElementById('autoscan-bar');
+    if(isAutoScanning) {
+        bar.style.display = 'flex';
+    } else {
+        bar.style.display = 'none';
+    }
+}
+
+function startAutoScan() {
+    if(autoScanInterval) clearInterval(autoScanInterval);
+    isAutoScanning = true;
+    updateAutoScanUI();
+    autoScanInterval = setInterval(performScanV3, scanIntervalMs);
+}
+
+function stopAutoScan() {
+    isAutoScanning = false;
+    updateAutoScanUI();
+    if(autoScanInterval) clearInterval(autoScanInterval);
+}
+
+async function captureFrameFromSource() {
+    /* Always returns a Blob for POST /api/scan/v3, regardless of camera source. */
+    const canvas = document.createElement('canvas');
+    let ctx = canvas.getContext('2d');
+
+    if (cameraSource === 'browser') {
+        const video = document.getElementById('browser-cam');
+        if (!video.videoWidth) return null;
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+    } else {
+        // webcam (MJPEG img) or phone — draw the <img> element to canvas
+        const img = document.getElementById('camera-feed');
+        if (!img.naturalWidth) return null;
+        canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+        // For MJPEG cross-origin, we may need try/catch
+        try { ctx.drawImage(img, 0, 0); } catch(e) { return null; }
+    }
+    return new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
+}
+
+async function performScanV3() {
+    if(!sessionActive || !isAutoScanning) return;
+    document.getElementById('autoscan-status').textContent = 'Scanning...';
+
+    const blob = await captureFrameFromSource();
+    if (!blob) {
+        document.getElementById('autoscan-status').textContent = 'Waiting for frame...';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('image', blob, 'scan.jpg');
+
+    try {
+        const res = await fetch('/api/scan/v3', { method: 'POST', body: formData });
+        const data = await res.json();
+        
+        if (data.results && data.results.length > 0) {
+            handleScanV3Results(data.results);
+        } else {
+            document.getElementById('autoscan-status').textContent = 'No face detected';
+        }
+    } catch(e) {
+        document.getElementById('autoscan-status').textContent = 'Scan error';
+    }
+}
+
+function handleScanV3Results(results) {
+    let validFound = 0;
+    
+    results.forEach(r => {
+        const isMatch = r.status === 'present' || r.status === 'already';
+        if(isMatch && r.student_id && !presentSet.has(r.student_id)) {
+            presentSet.add(r.student_id);
+            scanCount++;
+            validFound++;
+            
+            showResultCard(r.student_id, r.name, true, `Matched (Confidence: ${(r.confidence*100).toFixed(0)}%)`);
+        } else if (r.status === 'already') {
+            // Already marked, skip silently
+        } else if (!isMatch) {
+            showResultCard("Unknown", r.name || "Unknown", false, r.message || "Low confidence/Spoof");
+        }
+    });
+    
+    if(validFound > 0) {
+        document.getElementById('autoscan-status').textContent = `Matched ${validFound} student(s)!`;
+        document.getElementById('autoscan-count').textContent = `${scanCount} scanned`;
+        updateScanLogs();
+    } else {
+        document.getElementById('autoscan-status').textContent = 'Waiting...';
+    }
+}
+
+function showResultCard(id, name, success, desc) {
+    const card = document.getElementById('result-card');
+    const icon = document.getElementById('result-icon');
+    
+    card.style.display = 'flex';
+    card.className = success ? 'scan-result-card success' : 'scan-result-card error';
+    icon.textContent = success ? 'check_circle' : 'cancel';
+    icon.style.color = success ? 'var(--primary)' : 'var(--error)';
+    
+    document.getElementById('result-name').textContent = name;
+    document.getElementById('result-msg').textContent = desc;
+    
+    setTimeout(() => { card.style.display = 'none'; }, 4000);
+}
+
+function updateScanLogs() {
+    const list = document.getElementById('present-list');
+    const ct = document.getElementById('present-count');
+    
+    list.innerHTML = '';
+    ct.textContent = `${scanCount} total`;
+    
+    if(scanCount === 0) {
+        list.innerHTML = '<p class="empty-state">No data yet</p>';
+        document.getElementById('progress-pct').textContent = '0%';
+        document.getElementById('progress-bar').style.width = '0%';
+        return;
+    }
+    
+    presentSet.forEach(id => {
+        const item = document.createElement('div');
+        item.style = 'padding:10px 12px;background:var(--surface-container-low);border-radius:var(--radius-md);display:flex;align-items:center;gap:12px;animation:modalIn 0.2s';
+        item.innerHTML = `
+            <img src="/api/students/${id}/photo" onerror="this.style.display='none'" style="width:36px;height:36px;border-radius:50%;object-fit:cover;background:var(--surface-container-high)">
+            <div style="flex:1">
+                <p style="font-weight:600;font-size:0.875rem;color:var(--on-surface)">${id}</p>
+                <p style="font-size:0.75rem;color:var(--on-surface-variant)">Scanned</p>
+            </div>
+            <span class="material-symbols-outlined" style="color:var(--primary);font-size:20px">check_circle</span>
+        `;
+        list.appendChild(item);
+    });
+    
+    const total = Math.max(scanCount, 10);
+    const pct = Math.min(Math.round((scanCount / total)*100), 100);
+    document.getElementById('progress-pct').textContent = `${pct}%`;
+    document.getElementById('progress-bar').style.width = `${pct}%`;
+}
+
+// --- Demo Video Toggle ---
+let demoPlaying = false;
+function toggleDemoVideo() {
+    const video = document.getElementById('demo-video');
+    const label = document.getElementById('btn-demo-label');
+    const feed = document.getElementById('camera-feed');
+    const browserCam = document.getElementById('browser-cam');
+
+    if (demoPlaying) {
+        video.pause();
+        video.style.display = 'none';
+        feed.style.display = cameraSource === 'browser' ? 'none' : 'block';
+        browserCam.style.display = cameraSource === 'browser' ? 'block' : 'none';
+        label.textContent = 'Demo';
+        demoPlaying = false;
+    } else {
+        feed.style.display = 'none';
+        browserCam.style.display = 'none';
+        video.style.display = 'block';
+        video.play();
+        label.textContent = 'Stop Demo';
+        demoPlaying = true;
+    }
+}

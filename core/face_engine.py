@@ -163,6 +163,61 @@ class FaceEngine:
             return MatchResult(True, ident['name'], ident['student_id'], score, idx)
         return MatchResult(False, "", "", score, idx)
 
+    def match_with_threshold(self, embedding: np.ndarray,
+                             threshold: float) -> MatchResult:
+        """Match using a caller-specified cosine threshold.
+
+        Identical to match() but uses *threshold* instead of
+        config.COSINE_THRESHOLD.  Used by DetectV3Service for the
+        stricter 0.52 threshold.
+        """
+        if not self._cache_loaded:
+            self._load_embeddings_cache()
+        if self._embeddings is None or len(self._embeddings) == 0:
+            return MatchResult(False, "", "", 0.0, -1)
+        sims = np.dot(self._embeddings, embedding)
+        idx = int(np.argmax(sims))
+        score = float(sims[idx])
+        if score >= threshold and idx < len(self._identities):
+            ident = self._identities[idx]
+            return MatchResult(True, ident['name'], ident['student_id'], score, idx)
+        return MatchResult(False, "", "", score, idx)
+
+    # ── Face Metrics (V2 helper) ────────────────────────────
+
+    def get_face_metrics(self, frame: np.ndarray,
+                         face: DetectedFace) -> dict:
+        """Return detailed face metrics including pose information.
+
+        Extends quality_check with nose_x displacement for
+        pose classification (front / left / right).
+        """
+        qr = self.quality_check(frame, face)
+
+        # Compute nose_x displacement from eye center
+        nose_x_disp = 0.0
+        if face.landmarks is not None and len(face.landmarks) >= 5:
+            try:
+                left_eye = face.landmarks[0]
+                right_eye = face.landmarks[1]
+                nose = face.landmarks[2]
+                eye_center_x = (left_eye[0] + right_eye[0]) / 2
+                eye_dist = abs(right_eye[0] - left_eye[0])
+                if eye_dist > 0:
+                    nose_x_disp = (nose[0] - eye_center_x) / eye_dist
+            except (IndexError, TypeError):
+                pass
+
+        return {
+            'passed': qr.passed,
+            'face_size': qr.face_size,
+            'blur_score': qr.blur_score,
+            'brightness': qr.brightness,
+            'yaw_angle': qr.yaw_angle,
+            'nose_x_disp': nose_x_disp,
+            'reasons': qr.reasons,
+        }
+
     # ── Enrollment ──────────────────────────────────────────
 
     def enroll_from_photo(self, student_id: str, name: str,

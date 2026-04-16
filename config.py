@@ -50,6 +50,21 @@ QUALITY_MAX_YAW_ANGLE = 30
 LIVENESS_ENABLED = True
 LIVENESS_SCORE_THRESHOLD = 0.5
 
-# ── Server ──────────────────────────────────────────────────
+# ── Enroll V2 (Multi-Angle) ─────────────────────────────
+ENROLL_V2_MIN_FRAMES_PER_PHASE = 1      # tối thiểu frame hợp lệ mỗi phase
+ENROLL_V2_RECOMMENDED_FRAMES   = 3      # khuyến nghị
+ENROLL_V2_MAX_FRAMES_PER_PHASE = 8      # tối đa lấy
+ENROLL_V2_BLUR_MIN             = 80.0   # Laplacian variance tối thiểu
+ENROLL_V2_POSE_FRONT_MAX_DISP  = 0.12   # nose_x displacement tối đa cho "front"
+ENROLL_V2_POSE_TURN_THRESHOLD  = 0.04   # nose_x shift tối thiểu cho left/right
+
+# ── Detect V3 (Strict + Moiré) ─────────────────────────
+DETECT_V3_COSINE_THRESHOLD       = 0.52   # ngưỡng chặt hơn default 0.45
+DETECT_V3_MOIRE_SCREEN_THRESHOLD = 0.45   # dưới score này → is_screen
+
+# ── Model Paths ────────────────────────────────────────
+FACE_LANDMARKER_MODEL = MODELS_DIR / "face_landmarker.task"
+
+# ── Server ──────────────────────────────────────────────
 HOST = "0.0.0.0"
 PORT = 8000

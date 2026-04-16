@@ -8,6 +8,8 @@ from app.routes.enrollment import router as enrollment_router
 from app.routes.system import router as system_router
 from app.routes.live import router as live_router
 from app.routes.phone_camera import router as phone_camera_router
+from app.routes.enrollment_v2 import router as enrollment_v2_router
+from app.routes.scan_v3 import router as scan_v3_router
 
 router = APIRouter()
 
@@ -16,3 +18,6 @@ router.include_router(enrollment_router)
 router.include_router(system_router)
 router.include_router(live_router)
 router.include_router(phone_camera_router)
+router.include_router(enrollment_v2_router)
+router.include_router(scan_v3_router)
+

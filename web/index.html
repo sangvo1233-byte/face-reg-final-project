@@ -1,58 +1,28 @@
 <!DOCTYPE html>
-<html class="dark" lang="en">
+<html lang="en" data-theme="light">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Face Attendance — Smart Attendance System</title>
+    <meta name="description" content="AI-powered facial recognition attendance system for classrooms">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@700;800&display=swap"
-        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
         rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-    <script>
-        tailwind.config = {
-            darkMode: "class",
-            theme: {
-                extend: {
-                    colors: {
-                        "surface-bright": "#353940", "inverse-surface": "#dfe2eb", "on-error": "#690005",
-                        "secondary-fixed": "#97f89a", "primary-fixed-dim": "#a2c9ff", "outline-variant": "#414752",
-                        "on-primary-fixed": "#001c38", "surface-dim": "#10141a", "on-background": "#dfe2eb",
-                        "surface-container-highest": "#31353c", "on-tertiary-container": "#4f3400",
-                        "on-secondary-container": "#95f698", "error": "#ffb4ab", "inverse-primary": "#0060aa",
-                        "tertiary-container": "#da9600", "surface-container": "#1c2026", "tertiary": "#ffba42",
-                        "surface-container-low": "#181c22", "surface-container-lowest": "#0a0e14",
-                        "primary": "#a2c9ff", "on-primary": "#00315c", "primary-container": "#58a6ff",
-                        "on-error-container": "#ffdad6", "surface-tint": "#a2c9ff", "on-surface-variant": "#c0c7d4",
-                        "primary-fixed": "#d3e4ff", "background": "#10141a", "on-tertiary": "#432c00",
-                        "secondary-fixed-dim": "#7bdb80", "on-primary-container": "#003a6b",
-                        "secondary-container": "#027326", "surface": "#10141a", "inverse-on-surface": "#2d3137",
-                        "on-surface": "#dfe2eb", "error-container": "#93000a", "tertiary-fixed-dim": "#ffba42",
-                        "secondary": "#7bdb80", "on-secondary-fixed": "#002106", "outline": "#8b919d",
-                        "surface-container-high": "#262a31", "tertiary-fixed": "#ffddaf",
-                        "on-secondary": "#00390f", "surface-variant": "#31353c"
-                    },
-                    fontFamily: { headline: ["Manrope"], body: ["Inter"], label: ["Inter"] }
-                }
-            }
-        }
-    </script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
-<body class="bg-surface-container-lowest text-on-surface font-body antialiased">
+<body>
 
     <!-- ═══ SIDEBAR ═══ -->
-    <aside
-        class="fixed inset-y-0 left-0 flex flex-col z-40 h-full w-64 border-r border-outline-variant/20 bg-surface shadow-[0_12px_32px_rgba(162,201,255,0.08)]">
-        <div class="p-6">
-            <h1 class="text-xl font-extrabold tracking-tight text-on-surface font-headline">Face Attendance</h1>
+    <aside class="app-sidebar">
+        <div class="sidebar-brand">
+            <span class="material-symbols-outlined sidebar-brand-icon">face</span>
+            <h1 class="sidebar-brand-text">Facial Attendance</h1>
         </div>
-        <nav class="flex-1 px-4 space-y-1">
+        <nav class="sidebar-nav">
             <a class="nav-item active" data-tab="attendance" href="#">
                 <span class="material-symbols-outlined nav-icon">dashboard</span>
                 <span>Dashboard</span>
@@ -70,179 +40,111 @@
                 <span>Settings</span>
             </a>
         </nav>
-        <div class="p-4 mt-auto">
-            <div class="flex items-center gap-3 p-3 bg-surface-container rounded-xl">
-                <div
-                    class="w-10 h-10 rounded-full bg-primary-container/20 flex items-center justify-center border border-primary/20">
-                    <span class="material-symbols-outlined text-primary">account_circle</span>
-                </div>
-                <div>
-                    <p class="text-sm font-bold">Admin</p>
-                    <p class="text-[10px] text-outline uppercase tracking-widest">System Manager</p>
-                </div>
-            </div>
-        </div>
     </aside>
 
     <!-- ═══ HEADER ═══ -->
-    <header
-        class="fixed top-0 right-0 left-64 flex items-center justify-between px-8 z-30 h-16 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/10">
-        <div class="flex items-center gap-4">
-            <div
-                class="flex items-center gap-2 px-3 py-1 bg-surface-container rounded-full border border-outline-variant/10">
-                <span class="status-badge-dot w-2 h-2 rounded-full bg-outline" id="header-dot"></span>
-                <span class="text-[10px] font-bold uppercase tracking-widest" id="status-badge">Connecting...</span>
+    <header class="app-header">
+        <h2 class="header-title">Facial Attendance Dashboard</h2>
+        <div class="header-actions">
+            <div class="header-badge">
+                <span class="status-badge-dot" id="header-dot"></span>
+                <span class="header-badge-text" id="status-badge">Connecting...</span>
             </div>
-        </div>
-        <div class="flex items-center gap-4">
-            <span class="text-xs text-on-surface-variant font-mono tabular-nums" id="clock"></span>
-            <div class="h-4 w-px bg-outline-variant/30"></div>
-            <span
-                class="material-symbols-outlined text-on-surface/60 cursor-pointer hover:bg-surface-bright/50 p-2 rounded-lg transition-all text-xl">notifications</span>
+            <span class="header-clock" id="clock"></span>
+            <div class="header-divider"></div>
+            <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">
+                <span class="material-symbols-outlined icon-light">dark_mode</span>
+                <span class="material-symbols-outlined icon-dark">light_mode</span>
+            </button>
         </div>
     </header>
 
     <!-- ═══ MAIN CONTENT ═══ -->
-    <main class="ml-64 mt-16 p-8 min-h-screen">
+    <main class="app-main">
 
-        <!-- ═══ TAB: DASHBOARD / DIEM DANH ═══ -->
+        <!-- ═══ TAB: DASHBOARD ═══ -->
         <section class="tab-content active" id="tab-attendance">
-            <!-- Session Bar -->
-            <div class="flex items-center justify-between mb-6">
-                <div class="flex items-center gap-3" id="session-info">
+            <div class="flex-row justify-between mb-4">
+                <div class="flex-row" id="session-info">
                     <span class="dot off"></span>
-                    <span class="text-sm">No active session</span>
+                    <span class="session-text">No active session</span>
                 </div>
-                <div class="flex items-center gap-2">
-                    <input type="text" id="session-name" placeholder="Session name..."
-                        class="bg-surface-container-lowest border border-outline-variant/30 rounded-lg px-3 py-1.5 text-sm text-on-surface placeholder:text-outline focus:border-primary-container focus:ring-1 focus:ring-primary-container/50 w-52">
-                    <button
-                        class="bg-secondary text-on-secondary px-4 py-1.5 rounded-lg text-sm font-bold hover:opacity-90 transition-opacity"
-                        id="btn-start" onclick="startSession()">Start</button>
-                    <button
-                        class="bg-error-container text-on-error-container px-4 py-1.5 rounded-lg text-sm font-bold hover:opacity-90 transition-opacity"
-                        id="btn-stop" onclick="endSession()" style="display:none">End Session</button>
+                <div class="flex-row">
+                    <input type="text" id="session-name" placeholder="Session name..." class="form-input session-input">
+                    <button class="btn-primary" id="btn-start" onclick="uiStartSession()">
+                        <span class="material-symbols-outlined">play_arrow</span>Start
+                    </button>
+                    <button class="btn-danger-fill" id="btn-stop" onclick="uiEndSession()" style="display:none">
+                        <span class="material-symbols-outlined">stop</span>End Session
+                    </button>
                 </div>
             </div>
 
-            <!-- 12-col Grid -->
-            <div class="grid grid-cols-12 gap-6">
-                <!-- LEFT: Camera (8 cols) -->
-                <div class="col-span-8 flex flex-col gap-5">
-                    <!-- Camera Source Bar -->
-                    <div class="flex items-center gap-2">
-                        <button
-                            class="source-btn active text-[11px] font-bold px-3 py-1.5 rounded-lg border border-outline-variant/30 transition-all"
-                            id="src-webcam" onclick="setCameraSource('webcam')">
-                            <span
-                                class="material-symbols-outlined text-[14px] align-middle mr-0.5">videocam</span>Webcam
-                        </button>
-                        <button
-                            class="source-btn text-[11px] font-bold px-3 py-1.5 rounded-lg border border-outline-variant/30 transition-all"
-                            id="src-phone" onclick="setCameraSource('phone')">
-                            <span
-                                class="material-symbols-outlined text-[14px] align-middle mr-0.5">smartphone</span>Phone
-                        </button>
-                        <button
-                            class="text-[11px] font-bold px-3 py-1.5 rounded-lg border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 text-[#c4b5fd] hover:bg-[#8b5cf6]/20 transition-all"
-                            id="btn-demo" onclick="toggleDemoVideo()">
-                            <span
-                                class="material-symbols-outlined text-[14px] align-middle mr-0.5">play_circle</span><span
-                                id="btn-demo-label">Demo</span>
-                        </button>
-                        <span class="ml-2 flex items-center gap-1.5 text-[11px] text-on-surface-variant"
-                            id="phone-status" style="display:none">
-                            <span class="dot off" id="phone-dot"></span>
-                            <span id="phone-status-text">Not connected</span>
-                        </span>
+            <!-- End Session Summary Card -->
+            <div class="lumina-card summary-card" id="end-session-summary" style="display:none">
+                <div class="flex-row justify-between mb-2">
+                    <h3 class="enroll-title">Session Summary</h3>
+                    <button class="btn-ghost" onclick="hideSummary()">Close</button>
+                </div>
+                <div class="flex-row summary-row">
+                    <div class="summary-stat"><div class="val" id="summary-total">0</div><div class="lbl">Total Class</div></div>
+                    <div class="summary-stat"><div class="val color-primary" id="summary-present">0</div><div class="lbl">Present</div></div>
+                    <div class="summary-stat"><div class="val color-error" id="summary-absent">0</div><div class="lbl">Absent</div></div>
+                </div>
+            </div>
+
+            <div class="dash-grid">
+                <div class="flex-col">
+                    <div id="autoscan-bar" class="autoscan-bar">
+                        <span class="dot on"></span>
+                        <span class="autoscan-label">Auto-Scanning</span>
+                        <span class="autoscan-status-text" id="autoscan-status">Waiting...</span>
+                        <span class="autoscan-count-text" id="autoscan-count">0 scanned</span>
                     </div>
 
-                    <!-- Camera Feed -->
-                    <div
-                        class="relative aspect-video bg-surface-container rounded-2xl overflow-hidden group border border-outline-variant/10">
-                        <img id="camera-feed" src="/api/live/stream" alt="Camera" class="w-full h-full object-cover">
-                        <!-- Demo Video Feed -->
-                        <video id="demo-video" src="/static/demo.mp4"
-                            class="w-full h-full object-cover absolute inset-0" loop muted playsinline
-                            style="display:none"></video>
-                        <!-- Scanning Overlay -->
-                        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-                            <div
-                                class="w-[260px] h-[260px] rounded-full border-2 border-primary/30 flex items-center justify-center relative scan-circle">
-                                <div
-                                    class="absolute inset-0 rounded-full border-4 border-primary/15 animate-ping opacity-20">
-                                </div>
-                                <div
-                                    class="w-[200px] h-[200px] rounded-full border border-primary/50 shadow-[0_0_24px_rgba(162,201,255,0.3)]">
-                                </div>
-                                <div
-                                    class="absolute w-40 h-[1px] bg-gradient-to-r from-transparent via-primary/60 to-transparent animate-pulse top-1/2">
-                                </div>
-                            </div>
-                        </div>
-                        <!-- HUD Overlay -->
-                        <div
-                            class="absolute bottom-4 left-4 right-4 flex items-center justify-between bg-surface/60 backdrop-blur-md p-3 rounded-xl border border-white/5">
-                            <div class="flex items-center gap-3">
-                                <div class="p-1.5 bg-primary/10 rounded-lg">
-                                    <span class="material-symbols-outlined text-primary text-lg"
-                                        style="font-variation-settings:'FILL' 1">face</span>
+                    <div class="viewfinder">
+                        <img id="camera-feed" src="/api/live/stream" alt="Camera" crossorigin="anonymous">
+                        <video id="browser-cam" class="browser-cam-video" autoplay playsinline muted></video>
+                        <video id="demo-video" class="demo-video" src="/static/demo.mp4" loop muted playsinline></video>
+                        <div class="viewfinder-brackets"></div>
+                        <div class="viewfinder-hud">
+                            <div class="hud-row">
+                                <div class="hud-icon-wrap">
+                                    <span class="material-symbols-outlined hud-icon">face</span>
                                 </div>
                                 <div>
-                                    <p class="text-[9px] text-outline uppercase tracking-widest font-bold">Camera Source
-                                    </p>
-                                    <p class="text-sm font-headline font-extrabold" id="camera-hint">Webcam — Position
-                                        face in frame</p>
+                                    <p class="hud-label">Camera Source</p>
+                                    <p class="hud-value" id="camera-hint">Webcam — Position face in frame</p>
                                 </div>
                             </div>
                         </div>
                     </div>
-
-                    <!-- Scan Button -->
-                    <button
-                        class="w-full flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-br from-primary-container to-[#3b5bdb] text-white rounded-xl font-bold font-headline text-base uppercase tracking-wider hover:shadow-[0_8px_24px_rgba(88,166,255,0.3)] transition-all active:scale-[0.98] disabled:opacity-40 disabled:hover:shadow-none disabled:cursor-not-allowed"
-                        id="btn-scan" onclick="doScan()" disabled>
-                        <span class="material-symbols-outlined">face</span>
-                        SCAN FACE
-                    </button>
                 </div>
 
-                <!-- RIGHT: Real-time Logs (4 cols) -->
-                <div class="col-span-4 flex flex-col gap-4">
-                    <!-- Result Card -->
-                    <div class="bg-surface-container rounded-xl border border-outline-variant/10 p-4" id="result-card"
-                        style="display:none">
-                        <div class="flex items-center gap-3">
-                            <span class="material-symbols-outlined text-secondary text-2xl"
-                                style="font-variation-settings:'FILL' 1">check_circle</span>
-                            <div>
-                                <p class="font-headline font-bold text-lg" id="result-name">--</p>
-                                <p class="text-xs text-on-surface-variant" id="result-msg">--</p>
-                            </div>
+                <div class="flex-col">
+                    <div class="scan-result-card" id="result-card" style="display:none">
+                        <span class="material-symbols-outlined result-icon" id="result-icon">check_circle</span>
+                        <div>
+                            <p class="result-name" id="result-name">--</p>
+                            <p class="result-msg" id="result-msg">--</p>
                         </div>
                     </div>
 
-                    <!-- Real-time Log Panel -->
-                    <div
-                        class="bg-surface-container rounded-2xl flex-1 flex flex-col overflow-hidden border border-outline-variant/10 shadow-[0_12px_32px_rgba(162,201,255,0.04)]">
-                        <div
-                            class="p-4 border-b border-outline-variant/10 bg-surface-container-high/50 flex items-center justify-between">
-                            <span class="text-xs font-bold text-outline uppercase tracking-widest">Attendance Log</span>
-                            <span class="px-2 py-0.5 bg-primary/10 text-primary text-[10px] font-bold rounded-full"
-                                id="present-count">0 / 0</span>
+                    <div class="lumina-card log-card">
+                        <div class="lumina-card-header">
+                            <span class="log-header-label">Attendance Log</span>
+                            <span class="log-badge" id="present-count">0 / 0</span>
                         </div>
-                        <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1" id="present-list">
-                            <p class="empty text-center text-on-surface-variant/40 text-xs py-8">No data yet</p>
+                        <div class="custom-scrollbar log-scroll" id="present-list">
+                            <p class="empty-state">No data yet</p>
                         </div>
-                        <!-- Progress Bar -->
-                        <div class="p-4 bg-surface-container-high/40 border-t border-outline-variant/10">
-                            <div class="flex items-center justify-between mb-2">
-                                <p class="text-[10px] font-bold text-on-surface uppercase tracking-widest">Progress</p>
-                                <p class="text-[10px] font-bold text-primary" id="progress-pct">0%</p>
+                        <div class="progress-footer">
+                            <div class="progress-row">
+                                <p class="progress-label">Progress</p>
+                                <p class="progress-pct" id="progress-pct">0%</p>
                             </div>
-                            <div class="h-1.5 w-full bg-surface-container-lowest rounded-full overflow-hidden">
-                                <div class="h-full bg-primary rounded-full transition-all duration-500"
-                                    id="progress-bar" style="width:0%"></div>
+                            <div class="progress-track">
+                                <div class="progress-fill" id="progress-bar"></div>
                             </div>
                         </div>
                     </div>
@@ -250,377 +152,353 @@
             </div>
         </section>
 
-        <!-- ═══ TAB: HOC SINH ═══ -->
+        <!-- ═══ TAB: STUDENTS ═══ -->
         <section class="tab-content" id="tab-students">
-            <div class="flex items-center justify-between mb-6">
+            <div class="flex-row justify-between mb-4">
                 <div>
-                    <h2 class="text-2xl font-bold font-headline tracking-tight">Student List</h2>
-                    <p class="text-sm text-on-surface-variant">Manage and enroll new students</p>
+                    <h2 class="section-title">Student Management</h2>
+                    <p class="section-subtitle">Directory and Enrollment</p>
                 </div>
-                <button
-                    class="bg-primary-container text-on-primary-container px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 hover:opacity-90 transition-opacity"
-                    onclick="showEnrollForm()">
-                    <span class="material-symbols-outlined text-[16px]">person_add</span>Enroll New
+                <button class="btn-primary" onclick="showStudentCreateModal()">
+                    <span class="material-symbols-outlined">person_add</span>Add Student
                 </button>
             </div>
 
-            <!-- Enroll Form -->
-            <div class="bg-surface-container rounded-xl border border-outline-variant/10 p-6 mb-6" id="enroll-form"
-                style="display:none">
-                <h3 class="font-headline font-bold mb-4 flex items-center gap-2">
-                    <span class="material-symbols-outlined text-primary">badge</span>Enroll Student
-                </h3>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                    <div>
-                        <label
-                            class="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-1">Student
-                            ID</label>
-                        <input type="text" id="enroll-id" placeholder="HS001"
-                            class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface focus:border-primary-container focus:ring-1 focus:ring-primary-container/50">
-                    </div>
-                    <div>
-                        <label
-                            class="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-1">Full
-                            Name</label>
-                        <input type="text" id="enroll-name" placeholder="Nguyen Van A"
-                            class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface focus:border-primary-container focus:ring-1 focus:ring-primary-container/50">
-                    </div>
-                    <div>
-                        <label
-                            class="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-1">Class</label>
-                        <input type="text" id="enroll-class" placeholder="12A1"
-                            class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface focus:border-primary-container focus:ring-1 focus:ring-primary-container/50">
-                    </div>
-                    <div>
-                        <label
-                            class="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-1">Face
-                            Photo</label>
-                        <input type="file" id="enroll-photo" accept="image/*"
-                            class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-lg px-3 py-1.5 text-sm text-on-surface file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-primary-container file:text-on-primary-container">
-                    </div>
+            <div class="lumina-card flex-row justify-between mb-4" style="padding:16px">
+                <div class="view-tabs" id="student-view-tabs">
+                    <button class="view-tab active" onclick="loadStudents('active')">Active</button>
+                    <button class="view-tab" onclick="loadStudents('archived')">Archived</button>
+                    <button class="view-tab" onclick="loadStudents('all')">All</button>
                 </div>
-                <div class="flex gap-2">
-                    <button
-                        class="bg-primary-container text-on-primary-container px-5 py-2 rounded-lg text-sm font-bold hover:opacity-90 transition-opacity"
-                        onclick="submitEnroll()">Submit</button>
-                    <button
-                        class="bg-surface-container-high text-on-surface px-5 py-2 rounded-lg text-sm font-bold hover:bg-outline-variant/50 transition-colors"
-                        onclick="hideEnrollForm()">Cancel</button>
-                </div>
-                <div id="enroll-result" class="mt-3 text-sm rounded-lg px-3 py-2"></div>
             </div>
 
-            <!-- Student Table -->
-            <div class="bg-surface-container rounded-xl border border-outline-variant/10 overflow-hidden">
-                <table class="w-full text-sm">
+            <div class="lumina-card" style="overflow:hidden">
+                <table class="data-table">
                     <thead>
-                        <tr class="bg-surface-container-high border-b border-outline-variant/10">
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Student ID</th>
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Full Name</th>
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Class</th>
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Enrolled</th>
-                            <th class="px-4 py-3"></th>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Class</th>
+                            <th class="center">Status</th>
+                            <th class="right">Actions</th>
                         </tr>
                     </thead>
-                    <tbody id="student-tbody" class="divide-y divide-outline-variant/10">
-                        <tr>
-                            <td colspan="5" class="empty text-center text-on-surface-variant/40 py-8">Loading...</td>
-                        </tr>
+                    <tbody id="student-tbody">
+                        <tr><td colspan="5" class="empty-state">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
         </section>
 
-        <!-- ═══ TAB: LICH SU ═══ -->
+        <!-- ═══ TAB: HISTORY ═══ -->
         <section class="tab-content" id="tab-history">
-            <div class="mb-6">
-                <h2 class="text-2xl font-bold font-headline tracking-tight">Attendance History</h2>
-                <p class="text-sm text-on-surface-variant">Review past attendance sessions</p>
+            <div class="mb-4">
+                <h2 class="section-title">Attendance History</h2>
+                <p class="section-subtitle">Review past attendance sessions</p>
             </div>
-            <div class="bg-surface-container rounded-xl border border-outline-variant/10 overflow-hidden">
-                <table class="w-full text-sm">
+            <div class="lumina-card" style="overflow:hidden">
+                <table class="data-table">
                     <thead>
-                        <tr class="bg-surface-container-high border-b border-outline-variant/10">
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                #</th>
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Session Name</th>
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Time</th>
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Present</th>
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Absent</th>
-                            <th
-                                class="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-outline">
-                                Status</th>
-                            <th class="px-4 py-3"></th>
+                        <tr>
+                            <th>#</th>
+                            <th>Session Name</th>
+                            <th>Time</th>
+                            <th>Present</th>
+                            <th>Absent</th>
+                            <th>Status</th>
+                            <th></th>
                         </tr>
                     </thead>
-                    <tbody id="history-tbody" class="divide-y divide-outline-variant/10">
-                        <tr>
-                            <td colspan="7" class="empty text-center text-on-surface-variant/40 py-8">Loading...</td>
-                        </tr>
+                    <tbody id="history-tbody">
+                        <tr><td colspan="7" class="empty-state">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
 
             <!-- Detail Panel -->
-            <div class="bg-surface-container rounded-xl border border-outline-variant/10 p-6 mt-6" id="detail-panel"
-                style="display:none">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="font-headline font-bold text-lg" id="detail-title">Details</h3>
-                    <button
-                        class="bg-surface-container-high text-on-surface px-3 py-1 rounded-lg text-xs font-bold hover:bg-outline-variant/50 transition-colors"
-                        onclick="hideDetail()">Close</button>
+            <div class="lumina-card detail-panel" id="detail-panel">
+                <div class="flex-row justify-between mb-4">
+                    <h3 class="enroll-title" id="detail-title">Details</h3>
+                    <button class="btn-secondary" onclick="hideDetail()">Close</button>
                 </div>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div class="detail-grid">
                     <div>
-                        <h4 class="text-xs font-bold text-secondary mb-2 flex items-center gap-1.5">
-                            <span class="material-symbols-outlined text-[16px]"
-                                style="font-variation-settings:'FILL' 1">check_circle</span>
+                        <h4 class="detail-section-title present">
+                            <span class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1">check_circle</span>
                             Present (<span id="detail-present-count">0</span>)
                         </h4>
-                        <ul id="detail-present-list" class="space-y-1 text-sm max-h-64 overflow-y-auto"></ul>
+                        <ul id="detail-present-list" class="detail-list"></ul>
                     </div>
                     <div>
-                        <h4 class="text-xs font-bold text-error mb-2 flex items-center gap-1.5">
-                            <span class="material-symbols-outlined text-[16px]">cancel</span>
+                        <h4 class="detail-section-title absent">
+                            <span class="material-symbols-outlined" style="font-size:16px">cancel</span>
                             Absent (<span id="detail-absent-count">0</span>)
                         </h4>
-                        <ul id="detail-absent-list" class="space-y-1 text-sm max-h-64 overflow-y-auto"></ul>
+                        <ul id="detail-absent-list" class="detail-list"></ul>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- ═══ TAB: CAI DAT ═══ -->
+        <!-- ═══ TAB: SETTINGS ═══ -->
         <section class="tab-content" id="tab-settings">
-            <div class="mb-6">
-                <h2 class="text-2xl font-bold font-headline tracking-tight">System Settings</h2>
-                <p class="text-sm text-on-surface-variant">Configure camera, AI engine and system maintenance</p>
+            <div class="mb-4">
+                <h2 class="section-title">System Settings</h2>
+                <p class="section-subtitle">Configure camera &amp; system</p>
             </div>
-            <div class="space-y-6 max-w-3xl">
-                <!-- Camera Input -->
-                <div class="bg-surface-container rounded-xl border border-outline-variant/10 overflow-hidden">
-                    <div
-                        class="px-6 py-4 flex items-center gap-3 border-b border-outline-variant/10 bg-surface-container-high/50">
-                        <span class="material-symbols-outlined text-primary">videocam</span>
-                        <h3 class="font-headline font-bold">Camera Input</h3>
-                        <span
-                            class="ml-auto text-secondary text-[10px] font-bold px-2 py-0.5 rounded border border-secondary/30 uppercase tracking-widest">Live</span>
+            <div class="flex-col settings-max">
+                <div class="lumina-card" style="overflow:hidden">
+                    <div class="settings-card-header">
+                        <span class="material-symbols-outlined">videocam</span>
+                        <h3>Camera Source</h3>
                     </div>
-                    <div class="p-6 space-y-3">
-                        <div
-                            class="p-4 rounded-lg bg-surface-container-lowest border border-primary/20 flex items-center justify-between">
-                            <div class="flex items-center gap-3">
-                                <span class="material-symbols-outlined text-primary">sensors</span>
+                    <div class="settings-card-body">
+                        <div class="source-row">
+                            <button class="source-btn active" id="src-webcam" onclick="setCameraSource('webcam')"><span class="material-symbols-outlined nav-icon">videocam</span>Server Webcam</button>
+                            <button class="source-btn" id="src-browser" onclick="setCameraSource('browser')"><span class="material-symbols-outlined nav-icon">camera</span>Browser Camera</button>
+                            <button class="source-btn" id="src-phone" onclick="setCameraSource('phone')"><span class="material-symbols-outlined nav-icon">smartphone</span>Phone</button>
+                            <button class="btn-demo" id="btn-demo" onclick="toggleDemoVideo()"><span class="material-symbols-outlined nav-icon">play_circle</span><span id="btn-demo-label">Demo</span></button>
+                            <span class="phone-status" id="phone-status"><span class="dot off" id="phone-dot"></span><span id="phone-status-text">Not connected</span></span>
+                        </div>
+                        <div class="interval-row">
+                            <label class="interval-label">Auto-scan interval:</label>
+                            <select id="autoscan-interval" class="form-input interval-select" onchange="updateAutoScanInterval()">
+                                <option value="1500">1.5s (Fast)</option>
+                                <option value="2500" selected>2.5s (Normal)</option>
+                                <option value="4000">4s (Battery saver)</option>
+                            </select>
+                        </div>
+                        <div class="source-info" id="source-info-card">
+                            <div class="source-info-row">
+                                <span class="material-symbols-outlined" style="color:var(--primary-container)">sensors</span>
                                 <div>
-                                    <p class="text-[10px] font-bold uppercase tracking-wider text-outline">Active Source
-                                    </p>
-                                    <p class="text-sm font-medium">Webcam (MJPEG Stream)</p>
+                                    <p class="source-info-label">Active Source</p>
+                                    <p class="source-info-value" id="source-info-text">Server Webcam (MJPEG Stream)</p>
                                 </div>
                             </div>
-                            <span class="material-symbols-outlined text-secondary text-sm"
-                                style="font-variation-settings:'FILL' 1">check_circle</span>
-                        </div>
-                        <div
-                            class="p-4 rounded-lg bg-surface-container-lowest border border-outline-variant/20 flex items-center gap-3 hover:border-outline-variant transition-colors cursor-pointer">
-                            <span class="material-symbols-outlined text-on-surface-variant">smartphone</span>
-                            <div>
-                                <p class="text-[10px] font-bold uppercase tracking-wider text-outline">Phone Camera</p>
-                                <p class="text-sm font-medium">WebSocket Stream (Standby)</p>
-                            </div>
+                            <span class="material-symbols-outlined source-check">check_circle</span>
                         </div>
                     </div>
                 </div>
-                <!-- System Controls -->
-                <div class="bg-surface-container rounded-xl border border-outline-variant/10 p-6">
-                    <h3 class="font-headline font-bold text-xs mb-4 uppercase tracking-widest text-outline">System
-                    </h3>
-                    <div class="flex flex-wrap gap-3">
-                        <button
-                            class="flex-1 min-w-[180px] bg-surface-container-high text-on-surface py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-outline-variant/50 transition-all border border-outline-variant/20 text-sm"
-                            onclick="location.reload()">
-                            <span class="material-symbols-outlined text-sm">refresh</span>Reload Page
-                        </button>
-                        <button
-                            class="flex-1 min-w-[180px] bg-error-container/10 text-error py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-error-container/20 transition-all border border-error/20 text-sm">
-                            <span class="material-symbols-outlined text-sm">delete_sweep</span>Clear Cache
-                        </button>
+                <div class="lumina-card" style="padding:20px">
+                    <h3 class="system-section-label">System</h3>
+                    <div class="flex-row" style="gap:10px;flex-wrap:wrap">
+                        <button class="btn-secondary" onclick="location.reload()"><span class="material-symbols-outlined">refresh</span>Reload Page</button>
                     </div>
                 </div>
             </div>
         </section>
     </main>
 
-    <!-- ═══ TOAST ═══ -->
-    <div class="fixed bottom-6 right-6 z-[999] flex flex-col gap-2" id="toast-container"></div>
-
-    <!-- ═══ LOADING ═══ -->
-    <div class="fixed inset-0 bg-surface/80 backdrop-blur-sm flex flex-col items-center justify-center z-[998]"
-        id="loading" style="display:none">
-        <div class="w-9 h-9 border-3 border-outline-variant border-t-primary rounded-full animate-spin mb-3"></div>
-        <p class="text-on-surface-variant text-sm" id="loading-text">Processing...</p>
-    </div>
-
-    <!-- ═══ DEMO MODAL ═══ -->
-    <div class="demo-overlay fixed inset-0 bg-surface/90 backdrop-blur-md flex items-center justify-center z-[1000]"
-        id="demo-overlay" style="display:none">
-        <div
-            class="demo-modal bg-surface-container border border-outline-variant/20 rounded-2xl w-[90%] max-w-[600px] max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
-            <div
-                class="flex items-center justify-between px-5 py-3.5 border-b border-outline-variant/10 bg-surface-container-high">
-                <h2 class="font-headline font-bold text-sm text-primary">How to Use the Attendance System</h2>
-                <button class="text-on-surface-variant hover:text-error transition-colors text-xl leading-none"
-                    onclick="closeDemo()">&times;</button>
+    <!-- ═══ MODALS ═══ -->
+    
+    <!-- Student Create/Info Base Modal -->
+    <div class="lumina-modal-overlay" id="student-create-modal">
+        <div class="lumina-modal">
+            <div class="modal-header">
+                <h3>Add New Student</h3>
+                <button class="modal-close" onclick="closeModal('student-create-modal')"><span class="material-symbols-outlined">close</span></button>
             </div>
-            <div class="flex-1 overflow-hidden relative">
-                <div class="demo-slides relative min-h-[380px]" id="demo-slides">
-                    <div class="demo-slide active" data-slide="0">
-                        <div class="slide-icon">&#128218;</div>
-                        <h3 class="font-headline font-bold text-base mb-4">Step 1: Create a Session</h3>
-                        <div class="slide-visual">
-                            <div
-                                class="flex items-center gap-2 bg-surface-container-lowest border border-outline-variant/30 rounded-lg p-3 w-full">
-                                <span class="w-2.5 h-2.5 rounded-full bg-outline shrink-0"></span>
-                                <input type="text" value="Period 1 — Math" readonly
-                                    class="flex-1 bg-surface-container-high/50 border border-outline-variant/30 rounded px-2 py-1 text-xs text-on-surface">
-                                <span
-                                    class="shrink-0 px-3 py-1 rounded bg-secondary text-on-secondary text-xs font-bold">Start</span>
-                            </div>
-                        </div>
-                        <p class="text-xs text-on-surface-variant text-center mt-4 leading-relaxed max-w-md">Enter the
-                            session name, then click <strong class="text-primary">Start</strong> to begin.</p>
-                    </div>
-                    <div class="demo-slide" data-slide="1">
-                        <div class="slide-icon">&#128247;</div>
-                        <h3 class="font-headline font-bold text-base mb-4">Step 2: Select Camera Source</h3>
-                        <div class="slide-visual">
-                            <div
-                                class="flex gap-1 bg-surface-container-high border border-outline-variant/30 rounded-lg p-1.5">
-                                <span
-                                    class="px-4 py-1 rounded text-xs font-bold text-on-surface-variant border border-outline-variant/30">Webcam</span>
-                                <span
-                                    class="px-4 py-1 rounded text-xs font-bold text-white bg-primary-container border border-primary-container">Phone</span>
-                            </div>
-                            <div
-                                class="flex items-center gap-2 bg-primary/5 border border-dashed border-primary/30 rounded-lg p-3 w-full mt-2 text-xs text-on-surface-variant">
-                                <span class="text-2xl">&#128241;</span>
-                                <span>Open <strong class="text-primary">/phone</strong> on your mobile device</span>
-                            </div>
-                        </div>
-                        <p class="text-xs text-on-surface-variant text-center mt-4 leading-relaxed max-w-md">Select
-                            <strong class="text-primary">Webcam</strong> or <strong class="text-primary">Phone</strong>
-                            as your camera source.
-                        </p>
-                    </div>
-                    <div class="demo-slide" data-slide="2">
-                        <div class="slide-icon">&#128100;</div>
-                        <h3 class="font-headline font-bold text-base mb-4">Step 3: Scan Attendance</h3>
-                        <div class="slide-visual">
-                            <div
-                                class="w-full aspect-[16/10] bg-surface-container-lowest rounded-xl border border-outline-variant/30 flex items-center justify-center relative overflow-hidden">
-                                <div class="absolute w-16 h-20 opacity-40"
-                                    style="animation:guideBreath 3s ease-in-out infinite">
-                                    <svg viewBox="0 0 120 150" fill="none" stroke="rgba(88,166,255,0.6)"
-                                        stroke-width="2">
-                                        <rect x="5" y="5" width="110" height="140" rx="55" ry="70" />
-                                    </svg>
-                                </div>
-                                <span class="text-3xl relative z-10">&#128578;</span>
-                            </div>
-                            <div
-                                class="w-full text-center py-2 rounded-xl bg-gradient-to-r from-primary-container to-[#3b5bdb] text-white text-xs font-bold uppercase tracking-wider mt-1">
-                                SCAN FACE</div>
-                        </div>
-                        <p class="text-xs text-on-surface-variant text-center mt-4 leading-relaxed max-w-md">Point the
-                            camera at the student, then press <strong class="text-primary">SCAN FACE</strong>.</p>
-                    </div>
-                    <div class="demo-slide" data-slide="3">
-                        <div class="slide-icon">&#9989;</div>
-                        <h3 class="font-headline font-bold text-base mb-4">Step 4: View Results</h3>
-                        <div class="slide-visual">
-                            <div
-                                class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-xl overflow-hidden">
-                                <div
-                                    class="flex items-center justify-between px-3 py-2 border-b border-outline-variant/10 text-xs">
-                                    <span class="text-secondary font-bold">&#10003;</span><span
-                                        class="flex-1 ml-2">Nguyen Van An</span><span
-                                        class="text-on-surface-variant">08:05</span>
-                                </div>
-                                <div
-                                    class="flex items-center justify-between px-3 py-2 border-b border-outline-variant/10 text-xs">
-                                    <span class="text-secondary font-bold">&#10003;</span><span class="flex-1 ml-2">Tran
-                                        Thi Binh</span><span class="text-on-surface-variant">08:06</span>
-                                </div>
-                                <div class="flex items-center justify-between px-3 py-2 text-xs opacity-50"><span
-                                        class="text-error font-bold">&#10007;</span><span class="flex-1 ml-2">Le Hoang
-                                        Cuong</span><span class="text-on-surface-variant">Absent</span></div>
-                            </div>
-                        </div>
-                        <p class="text-xs text-on-surface-variant text-center mt-4 leading-relaxed max-w-md">The <strong
-                                class="text-primary">present</strong> and <strong class="text-primary">absent</strong>
-                            lists update in real time.</p>
-                    </div>
-                    <div class="demo-slide" data-slide="4">
-                        <div class="slide-icon">&#127891;</div>
-                        <h3 class="font-headline font-bold text-base mb-4">Step 5: Enroll New Students</h3>
-                        <div class="slide-visual">
-                            <div
-                                class="w-full bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-3 space-y-2">
-                                <div class="flex items-center gap-2 text-xs"><span
-                                        class="text-on-surface-variant w-12">ID:</span><span
-                                        class="bg-surface-container-high/50 border border-outline-variant/30 rounded px-2 py-0.5 text-on-surface">HS001</span>
-                                </div>
-                                <div class="flex items-center gap-2 text-xs"><span
-                                        class="text-on-surface-variant w-12">Name:</span><span
-                                        class="bg-surface-container-high/50 border border-outline-variant/30 rounded px-2 py-0.5 text-on-surface">Nguyen
-                                        Van An</span></div>
-                                <div class="flex items-center gap-2 text-xs"><span
-                                        class="text-on-surface-variant w-12">Class:</span><span
-                                        class="bg-surface-container-high/50 border border-outline-variant/30 rounded px-2 py-0.5 text-on-surface">12A1</span>
-                                </div>
-                            </div>
-                        </div>
-                        <p class="text-xs text-on-surface-variant text-center mt-4 leading-relaxed max-w-md">Go to
-                            <strong class="text-primary">Students</strong> tab, click <strong
-                                class="text-primary">Enroll New</strong>.
-                        </p>
-                    </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Student ID</label>
+                    <input type="text" class="form-input" id="new-student-id" placeholder="HS001">
                 </div>
-            </div>
-            <div
-                class="flex flex-col items-center gap-3 px-5 py-3.5 border-t border-outline-variant/10 bg-surface-container-high">
-                <div class="flex gap-1.5" id="demo-dots"></div>
-                <div class="flex items-center gap-4">
-                    <button
-                        class="bg-surface-container text-on-surface px-4 py-1.5 rounded-lg text-xs font-bold border border-outline-variant/30 hover:bg-outline-variant/40 transition-colors disabled:opacity-30"
-                        id="demo-prev" onclick="demoNav(-1)">Previous</button>
-                    <span class="text-[11px] text-on-surface-variant tabular-nums min-w-[40px] text-center"
-                        id="demo-counter">1 / 5</span>
-                    <button
-                        class="bg-primary-container text-on-primary-container px-4 py-1.5 rounded-lg text-xs font-bold hover:opacity-90 transition-opacity"
-                        id="demo-next" onclick="demoNav(1)">Next</button>
+                <div class="form-group">
+                    <label class="form-label">Full Name</label>
+                    <input type="text" class="form-input" id="new-student-name" placeholder="Nguyen Van A">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Class</label>
+                    <input type="text" class="form-input" id="new-student-class" placeholder="12A1">
+                </div>
+                <div class="mt-4" style="border-top:1px solid var(--outline-variant);padding-top:16px">
+                    <p class="form-label">Select Enrollment Method</p>
+                    <div class="flex-row">
+                        <button class="btn-primary" onclick="proceedToCameraEnroll()" style="flex:1;justify-content:center"><span class="material-symbols-outlined">camera</span>Camera Captures</button>
+                        <button class="btn-secondary" onclick="proceedToManualEnroll()" style="flex:1;justify-content:center"><span class="material-symbols-outlined">upload_file</span>File Upload</button>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
+    <!-- Enroll Camera Modal -->
+    <div class="lumina-modal-overlay" id="enroll-modal">
+        <div class="lumina-modal" style="width:95%;max-width:800px">
+            <div class="modal-header">
+                <h3>Enroll Face (Camera)</h3>
+                <button class="modal-close" onclick="closeEnrollCameraModal()"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div class="modal-body">
+                <div class="flex-row justify-between mb-4">
+                    <div class="flex-col" style="gap:4px">
+                        <p class="enroll-title" id="enroll-cam-title">--</p>
+                        <p class="enroll-subtitle" id="enroll-cam-subtitle">--</p>
+                    </div>
+                    <div class="flex-row" style="gap:6px" id="enroll-steps"></div>
+                </div>
+                <div class="enroll-grid">
+                    <div class="cam-container">
+                        <video id="enroll-camera" class="cam-video" autoplay playsinline muted></video>
+                        <div class="cam-instruction">
+                            <p class="cam-instr-text" id="enroll-instruction">Loading camera...</p>
+                        </div>
+                        <div class="cam-flash" id="enroll-flash"></div>
+                    </div>
+                    <div class="flex-col">
+                        <div class="thumb-card" id="thumb-card-front" onclick="retakeAngle('front')">
+                            <div class="thumb-placeholder"><span class="material-symbols-outlined">face</span><p class="thumb-label">FRONT</p></div>
+                            <img class="thumb-img" id="thumb-img-front">
+                            <div class="thumb-overlay"><span class="material-symbols-outlined">refresh</span><p>Retake</p></div>
+                            <div class="thumb-check"><span class="material-symbols-outlined" style="font-size:14px">check</span></div>
+                        </div>
+                        <div class="thumb-side-row">
+                            <div class="thumb-card" id="thumb-card-left" onclick="retakeAngle('left')">
+                                <div class="thumb-placeholder"><span class="material-symbols-outlined" style="transform:rotateY(30deg)">face</span><p class="thumb-label">LEFT</p></div>
+                                <img class="thumb-img" id="thumb-img-left">
+                                <div class="thumb-overlay"><span class="material-symbols-outlined">refresh</span><p>Retake</p></div>
+                                <div class="thumb-check"><span class="material-symbols-outlined" style="font-size:14px">check</span></div>
+                            </div>
+                            <div class="thumb-card" id="thumb-card-right" onclick="retakeAngle('right')">
+                                <div class="thumb-placeholder"><span class="material-symbols-outlined" style="transform:rotateY(-30deg)">face</span><p class="thumb-label">RIGHT</p></div>
+                                <img class="thumb-img" id="thumb-img-right">
+                                <div class="thumb-overlay"><span class="material-symbols-outlined">refresh</span><p>Retake</p></div>
+                                <div class="thumb-check"><span class="material-symbols-outlined" style="font-size:14px">check</span></div>
+                            </div>
+                        </div>
+                        <div class="capture-wrap">
+                            <button class="btn-primary" id="enroll-capture-btn" onclick="captureEnrollFrame()"><span class="material-symbols-outlined">camera</span>Capture</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeEnrollCameraModal()">Cancel</button>
+                <button class="btn-primary" id="enroll-submit-btn" disabled onclick="submitEnroll(false)">Save Enrollment</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manual Enroll Modal -->
+    <div class="lumina-modal-overlay" id="manual-enroll-modal">
+        <div class="lumina-modal">
+            <div class="modal-header">
+                <h3>Enroll Face (Upload)</h3>
+                <button class="modal-close" onclick="closeModal('manual-enroll-modal')"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div class="modal-body">
+                <div class="flex-col mb-4" style="gap:4px">
+                    <p class="enroll-title" id="manual-enroll-title">Student Name</p>
+                    <p class="enroll-subtitle" id="manual-enroll-subtitle">ID: --</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Front Angle Image</label>
+                    <input type="file" class="form-input" id="manual-front" accept="image/*" onchange="validateManualFile('front')">
+                    <p class="validation-msg" id="manual-front-err"></p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Left Angle Image</label>
+                    <input type="file" class="form-input" id="manual-left" accept="image/*" onchange="validateManualFile('left')">
+                    <p class="validation-msg" id="manual-left-err"></p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Right Angle Image</label>
+                    <input type="file" class="form-input" id="manual-right" accept="image/*" onchange="validateManualFile('right')">
+                    <p class="validation-msg" id="manual-right-err"></p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('manual-enroll-modal')">Cancel</button>
+                <button class="btn-primary" id="manual-enroll-submit" onclick="submitEnroll(true)" disabled>Save Enrollment</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Student Detail Modal -->
+    <div class="lumina-modal-overlay" id="student-detail-modal">
+        <div class="lumina-modal">
+            <div class="modal-header">
+                <h3>Student Profile</h3>
+                <div class="flex-row">
+                    <span class="status-chip" id="detail-status">Active</span>
+                    <button class="modal-close" onclick="closeModal('student-detail-modal')"><span class="material-symbols-outlined">close</span></button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="flex-row mb-4" style="align-items:flex-start">
+                    <img id="detail-photo" class="scan-avatar detail-photo" onerror="this.src=''">
+                    <div class="flex-col" style="gap:4px">
+                        <h2 class="detail-name" id="detail-name">Name</h2>
+                        <p class="detail-meta" id="detail-id">ID: --</p>
+                        <p class="detail-meta" id="detail-class">Class: --</p>
+                    </div>
+                </div>
+                <div class="lumina-card" style="padding:16px">
+                    <h4 class="form-label">Face Embeddings</h4>
+                    <p class="detail-body-text" id="detail-embeddings">0 reference angles recorded</p>
+                </div>
+                <div class="lumina-card mt-4" style="padding:16px">
+                    <h4 class="form-label">Recent History</h4>
+                    <div class="custom-scrollbar detail-history-scroll" id="detail-history-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Student Edit Modal -->
+    <div class="lumina-modal-overlay" id="student-edit-modal">
+        <div class="lumina-modal">
+            <div class="modal-header">
+                <h3>Edit Student Metadata</h3>
+                <button class="modal-close" onclick="closeModal('student-edit-modal')"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-student-id">
+                <div class="form-group">
+                    <label class="form-label">Student ID</label>
+                    <input type="text" class="form-input" id="edit-student-id-display" disabled>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Full Name</label>
+                    <input type="text" class="form-input" id="edit-student-name">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Class</label>
+                    <input type="text" class="form-input" id="edit-student-class">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('student-edit-modal')">Cancel</button>
+                <button class="btn-primary" onclick="saveStudentEdit()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Dialog -->
+    <div class="lumina-modal-overlay" id="confirm-dialog" style="z-index:2000">
+        <div class="lumina-modal" style="width:90%;max-width:400px">
+            <div class="modal-body text-center" style="padding-top:32px">
+                <div class="confirm-icon warning" id="confirm-icon"><span class="material-symbols-outlined" id="confirm-icon-sym">warning</span></div>
+                <h3 class="confirm-title" id="confirm-title">Confirm</h3>
+                <p class="confirm-msg" id="confirm-msg">Are you sure?</p>
+                <div class="flex-row confirm-actions">
+                    <button class="btn-secondary" id="confirm-cancel">Cancel</button>
+                    <button class="btn-danger-fill" id="confirm-ok">Yes, Proceed</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ TOAST ═══ -->
+    <div class="toast-wrap" id="toast-container"></div>
+
+    <!-- ═══ LOADING ═══ -->
+    <div class="loading-overlay" id="loading">
+        <div class="loading-spinner"></div>
+        <p class="loading-text" id="loading-text">Processing...</p>
+    </div>
+
     <script src="/static/app.js"></script>
 </body>
-
 </html>
