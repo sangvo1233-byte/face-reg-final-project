@@ -234,6 +234,75 @@ class Database:
         conn.close()
         return c.rowcount
 
+    def replace_student_embeddings(
+        self,
+        student_id: str,
+        name: str,
+        class_name: str,
+        embeddings: list[dict],
+        photo_path: str | None = None,
+    ) -> dict:
+        """Atomically upsert student metadata and replace active embeddings."""
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN")
+            existing = conn.execute(
+                "SELECT id FROM students WHERE id = ?", (student_id,)
+            ).fetchone()
+
+            if existing:
+                if photo_path is not None:
+                    conn.execute(
+                        """UPDATE students
+                           SET name = ?, class_name = ?, photo_path = ?, is_active = 1
+                           WHERE id = ?""",
+                        (name, class_name, photo_path, student_id),
+                    )
+                else:
+                    conn.execute(
+                        """UPDATE students
+                           SET name = ?, class_name = ?, is_active = 1
+                           WHERE id = ?""",
+                        (name, class_name, student_id),
+                    )
+            else:
+                conn.execute(
+                    """INSERT INTO students
+                       (id, name, class_name, photo_path, enrolled_at, is_active)
+                       VALUES (?, ?, ?, ?, ?, 1)""",
+                    (student_id, name, class_name, photo_path, datetime.now().isoformat()),
+                )
+
+            old_count = conn.execute(
+                "UPDATE face_embeddings SET is_active = 0 WHERE student_id = ? AND is_active = 1",
+                (student_id,),
+            ).rowcount
+
+            saved = 0
+            for item in embeddings:
+                buf = io.BytesIO()
+                np.save(buf, item["embedding"])
+                conn.execute(
+                    """INSERT INTO face_embeddings
+                       (student_id, embedding, quality_score, source)
+                       VALUES (?, ?, ?, ?)""",
+                    (
+                        student_id,
+                        buf.getvalue(),
+                        item.get("quality", 0.0),
+                        item.get("source", "camera"),
+                    ),
+                )
+                saved += 1
+
+            conn.commit()
+            return {"old_count": old_count, "saved": saved}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def get_embedding_count(self, student_id: str = None) -> int:
         conn = self._conn()
         if student_id:

@@ -103,9 +103,38 @@ async def get_student_photo(student_id: str):
         raise HTTPException(404, "Photo not found")
     
     path = str(s['photo_path'])
+    real_path = os.path.realpath(path)
+    allowed_dir = os.path.realpath(str(config.FACE_CROPS_DIR))
+    try:
+        in_allowed_dir = os.path.commonpath([real_path, allowed_dir]) == allowed_dir
+    except ValueError:
+        in_allowed_dir = False
+    if not in_allowed_dir:
+        raise HTTPException(403, "Access denied")
     if not os.path.exists(path):
         raise HTTPException(404, "Photo file missing")
-    return FileResponse(path)
+    return FileResponse(real_path, media_type="image/jpeg")
+
+@router.get("/api/evidence/{filename}")
+async def get_evidence_photo(filename: str):
+    """Serve an attendance evidence image with path traversal protection."""
+    if os.path.basename(filename) != filename:
+        raise HTTPException(400, "Invalid filename")
+    if not filename.lower().endswith((".jpg", ".jpeg", ".png")):
+        raise HTTPException(400, "Invalid evidence file type")
+
+    path = config.EVIDENCE_DIR / filename
+    real_path = os.path.realpath(str(path))
+    allowed_dir = os.path.realpath(str(config.EVIDENCE_DIR))
+    try:
+        in_allowed_dir = os.path.commonpath([real_path, allowed_dir]) == allowed_dir
+    except ValueError:
+        in_allowed_dir = False
+    if not in_allowed_dir:
+        raise HTTPException(403, "Access denied")
+    if not os.path.exists(real_path):
+        raise HTTPException(404, "Evidence file missing")
+    return FileResponse(real_path, media_type="image/jpeg")
 
 @router.delete("/api/students/{student_id}")
 async def delete_student(student_id: str):

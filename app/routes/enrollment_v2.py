@@ -14,34 +14,48 @@ from core.enrollment_v2 import get_enrollment_v2_service
 router = APIRouter(tags=["enrollment_v2"])
 
 
+def _json_float(value, default: float = 0.0) -> float:
+    """Convert numpy/python numeric values to JSON-safe float."""
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @router.post("/api/enroll/v2")
 async def enroll_v2(
     student_id: str = Form(...),
     name: str = Form(...),
     class_name: str = Form(""),
-    image_front: UploadFile = File(...),
-    image_left: UploadFile = File(...),
-    image_right: UploadFile = File(...),
+    image_front: list[UploadFile] = File(...),
+    image_left: list[UploadFile] = File(...),
+    image_right: list[UploadFile] = File(...),
 ):
     """Enroll a student using 3-angle images (front, left, right).
 
     Multi-angle enrollment improves recognition accuracy by
     averaging embeddings from different head poses.
     """
-    # Decode all three images
+    # Decode all provided images. Each field accepts one file for backward
+    # compatibility or multiple files for multi-frame web enrollment.
     images = {}
     for key, upload in [
         ("front", image_front),
         ("left", image_left),
         ("right", image_right),
     ]:
-        contents = await upload.read()
-        frame = cv2.imdecode(
-            np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR
-        )
-        if frame is None:
-            raise HTTPException(400, f"Invalid image for angle: {key}")
-        images[key] = frame
+        frames = []
+        for item in upload:
+            contents = await item.read()
+            frame = cv2.imdecode(
+                np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR
+            )
+            if frame is None:
+                raise HTTPException(400, f"Invalid image for angle: {key}")
+            frames.append(frame)
+        images[key] = frames[0] if len(frames) == 1 else frames
 
     service = get_enrollment_v2_service()
     result = service.enroll_multi_angle(student_id, name, class_name, images)
@@ -82,12 +96,27 @@ async def validate_v2_angle(
     engine = get_engine()
     engine._ensure_model()
     
-    result = service._process_angle(engine, frame, phase)
-    
-    # Scrub embedding from response
-    if "embedding" in result:
-        del result["embedding"]
-    if "best_aligned" in result:
-        del result["best_aligned"]
-        
-    return result
+    try:
+        result = service._process_angle(engine, frame, phase)
+    except Exception as exc:
+        logger.exception("Enroll V2 angle validation failed")
+        raise HTTPException(500, f"Validation failed: {exc}") from exc
+
+    quality = _json_float(result.get("quality", 0.0))
+    blur_score = _json_float(result.get("blur_score", quality))
+    nose_x_disp = _json_float(result.get("nose_x_disp", 0.0))
+
+    return {
+        "name": str(result.get("name", angle.upper())),
+        "success": bool(result.get("success", False)),
+        "reason": str(result.get("reason", "")),
+        "quality": quality,
+        "blur_score": blur_score,
+        "nose_x_disp": nose_x_disp,
+        "metrics": {
+            "quality": quality,
+            "blur_score": blur_score,
+            "nose_x_disp": nose_x_disp,
+            "pose_ok": bool(result.get("success", False)),
+        },
+    }

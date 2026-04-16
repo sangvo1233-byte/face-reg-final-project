@@ -75,9 +75,9 @@ class EnrollmentV2Service:
 
         for phase in PHASES:
             angle = phase["name"].lower()   # "front", "left", "right"
-            img = images[angle]
+            frames = self._frames_for_angle(images[angle])
 
-            result = self._process_angle(engine, img, phase)
+            result = self._process_angle_frames(engine, frames, phase)
             phase_results.append(result)
 
         # All 3 angles must pass
@@ -93,6 +93,8 @@ class EnrollmentV2Service:
                         "success": r["success"],
                         "quality": r.get("quality", 0),
                         "reason": r.get("reason", ""),
+                        "frame_count": r.get("frame_count", 0),
+                        "frames_required": r.get("frames_required", 1),
                     }
                     for r in phase_results
                 ],
@@ -101,34 +103,22 @@ class EnrollmentV2Service:
             }
 
         # ── Save to database ────────────────────────────
-        db = get_db()
-        
-        # Update existing student metadata on re-enroll, or create new
-        existing = db.get_student_any(student_id)
-        if existing:
-            db.update_student(student_id, name=name, class_name=class_name)
-            if existing.get('is_active') == 0:
-                db.restore_student(student_id)
-        else:
-            db.add_student(student_id, name, class_name)
-
-        # Replace old embeddings (only happens after new set is fully validated)
-        old_count = db.get_embedding_count(student_id)
-        if old_count > 0:
-            db.delete_embeddings(student_id)
-            logger.info(f"Deleted {old_count} old embedding(s) for {student_id}")
-
-        saved = 0
         best_aligned = None
         best_blur = 0.0
+        photo_path = None
+        embeddings_to_save = []
 
         for pr in successful:
             source = f"v2_{pr['name'].lower()}"
             quality = pr.get("quality", 0.0)
-            db.save_embedding(student_id, pr["embedding"], quality, source)
-            saved += 1
+            embeddings_to_save.append({
+                "embedding": pr["embedding"],
+                "quality": quality,
+                "source": source,
+            })
             logger.info(
-                f"  Saved: {source} (quality={quality:.0f})"
+                f"  Prepared: {source} (quality={quality:.0f}, "
+                f"frames={pr.get('frame_count', 1)})"
             )
 
             # Track best aligned face for photo
@@ -140,8 +130,24 @@ class EnrollmentV2Service:
         if best_aligned is not None:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             photo_path = str(config.FACE_CROPS_DIR / f"{student_id}_{ts}.jpg")
-            cv2.imwrite(photo_path, best_aligned)
-            db.update_student(student_id, photo_path=photo_path)
+            if not cv2.imwrite(photo_path, best_aligned):
+                logger.warning(f"Failed to write enrollment photo for {student_id}")
+                photo_path = None
+
+        # Atomically update metadata and replace embeddings only after the
+        # complete new embedding set has been validated and prepared.
+        db = get_db()
+        save_result = db.replace_student_embeddings(
+            student_id=student_id,
+            name=name,
+            class_name=class_name,
+            embeddings=embeddings_to_save,
+            photo_path=photo_path,
+        )
+        saved = save_result["saved"]
+        old_count = save_result["old_count"]
+        if old_count > 0:
+            logger.info(f"Replaced {old_count} old embedding(s) for {student_id}")
 
         engine.reload_cache()
 
@@ -159,11 +165,81 @@ class EnrollmentV2Service:
                     "success": r["success"],
                     "quality": r.get("quality", 0),
                     "reason": r.get("reason", ""),
+                    "frame_count": r.get("frame_count", 0),
+                    "frames_required": r.get("frames_required", 1),
                 }
                 for r in phase_results
             ],
             "total_saved": saved,
             "embeddings_saved": saved,
+        }
+
+    def _frames_for_angle(self, value) -> list[np.ndarray]:
+        """Normalize one image or a list of images into a frame list."""
+        if isinstance(value, (list, tuple)):
+            return [frame for frame in value if frame is not None]
+        return [value] if value is not None else []
+
+    def _process_angle_frames(self, engine, frames: list[np.ndarray], phase: dict) -> dict:
+        """Validate multiple frames for one angle and average good embeddings."""
+        angle_name = phase["name"]
+        if not frames:
+            return {
+                "name": angle_name,
+                "success": False,
+                "reason": "No frames provided",
+                "embedding": None,
+                "quality": 0.0,
+                "frame_count": 0,
+                "frames_required": 1,
+            }
+
+        max_frames = max(1, config.ENROLL_V2_MAX_FRAMES_PER_PHASE)
+        frames = frames[:max_frames]
+        required = (
+            min(config.ENROLL_V2_RECOMMENDED_FRAMES, len(frames))
+            if len(frames) > 1 else config.ENROLL_V2_MIN_FRAMES_PER_PHASE
+        )
+
+        frame_results = [
+            self._process_angle(engine, frame, phase)
+            for frame in frames
+        ]
+        successful = [r for r in frame_results if r["success"]]
+
+        if len(successful) < required:
+            first_failure = next((r for r in frame_results if not r["success"]), None)
+            reason = first_failure.get("reason", "Not enough valid frames") if first_failure else "Not enough valid frames"
+            return {
+                "name": angle_name,
+                "success": False,
+                "reason": f"{reason} ({len(successful)}/{required} good frames)",
+                "embedding": None,
+                "quality": 0.0,
+                "frame_count": len(successful),
+                "frames_required": required,
+            }
+
+        embeddings = np.stack([r["embedding"] for r in successful])
+        emb = np.mean(embeddings, axis=0)
+        norm = np.linalg.norm(emb)
+        if norm > 0:
+            emb = emb / norm
+
+        best = max(successful, key=lambda r: r.get("blur_score", 0))
+        quality = float(np.mean([r.get("quality", 0.0) for r in successful]))
+
+        return {
+            "name": angle_name,
+            "success": True,
+            "reason": "",
+            "embedding": emb,
+            "quality": quality,
+            "blur_score": best.get("blur_score", quality),
+            "best_aligned": best.get("best_aligned"),
+            "nose_x_disp": best.get("nose_x_disp", 0.0),
+            "frame_count": len(successful),
+            "frames_required": required,
         }
 
     def _process_angle(self, engine, image: np.ndarray, phase: dict) -> dict:
@@ -244,8 +320,9 @@ class EnrollmentV2Service:
         relative to eye center) instead of MediaPipe.
 
         Args:
-            nose_x_disp: Normalized nose X displacement from eye center
-                         positive = nose shifted right, negative = shifted left
+            nose_x_disp: Normalized nose X displacement from eye center.
+                         Positive maps to the user's LEFT turn in the
+                         enrollment camera feed; negative maps to RIGHT.
             verify_type: "center", "left", or "right"
 
         Returns:
@@ -263,20 +340,20 @@ class EnrollmentV2Service:
             return True, ""
 
         elif verify_type == "left":
-            # Looking left: nose shifts left relative to eye center → negative disp
-            if nose_x_disp > -turn_min:
+            # User-facing LEFT in the enrollment camera feed.
+            if nose_x_disp < turn_min:
                 return False, (
                     f"Face not turned left enough (disp={nose_x_disp:.3f}, "
-                    f"need < -{turn_min})"
+                    f"need > {turn_min})"
                 )
             return True, ""
 
         elif verify_type == "right":
-            # Looking right: nose shifts right → positive disp
-            if nose_x_disp < turn_min:
+            # User-facing RIGHT in the enrollment camera feed.
+            if nose_x_disp > -turn_min:
                 return False, (
                     f"Face not turned right enough (disp={nose_x_disp:.3f}, "
-                    f"need > {turn_min})"
+                    f"need < -{turn_min})"
                 )
             return True, ""
 
