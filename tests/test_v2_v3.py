@@ -291,11 +291,7 @@ class TestEnrollmentV2Service:
 
         # Mock DB
         db = MagicMock()
-        db.add_student = MagicMock(return_value=True)
-        db.get_embedding_count = MagicMock(return_value=0)
-        db.delete_embeddings = MagicMock()
-        db.save_embedding = MagicMock()
-        db.update_student = MagicMock()
+        db.replace_student_embeddings.return_value = {"saved": 3, "old_count": 0}
         mock_get_db.return_value = db
 
         service = EnrollmentV2Service()
@@ -315,7 +311,8 @@ class TestEnrollmentV2Service:
 
         assert result["success"] is True
         assert result["total_saved"] == 3
-        assert db.save_embedding.call_count == 3
+        assert db.replace_student_embeddings.call_count == 1
+        assert len(db.replace_student_embeddings.call_args.kwargs["embeddings"]) == 3
 
     @patch("core.enrollment_v2.get_db")
     @patch("core.enrollment_v2.get_engine")
@@ -347,8 +344,8 @@ class TestEnrollmentV2Service:
         from core.enrollment_v2 import EnrollmentV2Service
         service = EnrollmentV2Service()
 
-        # Looking left means negative displacement
-        ok, reason = service._verify_pose(-0.08, "left")
+        # User-facing LEFT in the enrollment camera feed means positive displacement.
+        ok, reason = service._verify_pose(0.08, "left")
         assert ok is True
 
         ok, reason = service._verify_pose(0.0, "left")
@@ -359,11 +356,87 @@ class TestEnrollmentV2Service:
         from core.enrollment_v2 import EnrollmentV2Service
         service = EnrollmentV2Service()
 
-        ok, reason = service._verify_pose(0.08, "right")
+        ok, reason = service._verify_pose(-0.08, "right")
         assert ok is True
 
         ok, reason = service._verify_pose(0.0, "right")
         assert ok is False
+
+    @patch("core.enrollment_v2.get_db")
+    @patch("core.enrollment_v2.get_engine")
+    def test_enroll_multi_frame_average(self, mock_get_engine, mock_get_db):
+        """Multi-frame enrollment averages good embeddings per angle."""
+        from core.enrollment_v2 import EnrollmentV2Service
+
+        engine = MagicMock()
+        engine._ensure_model = MagicMock()
+        engine.reload_cache = MagicMock()
+        mock_get_engine.return_value = engine
+
+        db = MagicMock()
+        db.replace_student_embeddings.return_value = {"saved": 3, "old_count": 0}
+        mock_get_db.return_value = db
+
+        service = EnrollmentV2Service()
+
+        def fake_process_angle(_engine, image, phase):
+            emb = np.zeros(512, dtype=np.float32)
+            emb[int(image[0, 0, 0])] = 1.0
+            return {
+                "name": phase["name"],
+                "success": True,
+                "reason": "",
+                "embedding": emb,
+                "quality": 120.0,
+                "blur_score": 120.0,
+                "best_aligned": None,
+            }
+
+        service._process_angle = fake_process_angle
+        images = {
+            "front": [np.full((4, 4, 3), i, dtype=np.uint8) for i in (0, 1, 2)],
+            "left": [np.full((4, 4, 3), i, dtype=np.uint8) for i in (3, 4, 5)],
+            "right": [np.full((4, 4, 3), i, dtype=np.uint8) for i in (6, 7, 8)],
+        }
+
+        result = service.enroll_multi_angle("HS002", "Multi", "12A1", images)
+
+        assert result["success"] is True
+        assert result["phase_results"][0]["frame_count"] == 3
+        assert result["phase_results"][0]["frames_required"] == 3
+        assert db.replace_student_embeddings.call_count == 1
+        saved_embedding = db.replace_student_embeddings.call_args.kwargs["embeddings"][0]["embedding"]
+        assert np.isclose(np.linalg.norm(saved_embedding), 1.0)
+
+    def test_replace_student_embeddings_rolls_back_on_failure(self, monkeypatch):
+        """Embedding replacement keeps old data if the transaction fails."""
+        import config
+        from core.database import Database
+
+        db_path = Path("database") / "test_tx.db"
+        db_path.unlink(missing_ok=True)
+        monkeypatch.setattr(config, "SQLITE_DB_PATH", db_path)
+        db = Database()
+        old_emb = np.ones(512, dtype=np.float32)
+        old_emb /= np.linalg.norm(old_emb)
+
+        db.add_student("HS_TX", "Old Name", "12A1")
+        db.save_embedding("HS_TX", old_emb, 99.0, "old")
+
+        with pytest.raises(KeyError):
+            db.replace_student_embeddings(
+                student_id="HS_TX",
+                name="New Name",
+                class_name="12A2",
+                embeddings=[
+                    {"embedding": old_emb, "quality": 100.0, "source": "new_front"},
+                    {"quality": 100.0, "source": "broken"},
+                ],
+            )
+
+        assert db.get_embedding_count("HS_TX") == 1
+        assert db.get_student_any("HS_TX")["name"] == "Old Name"
+        db_path.unlink(missing_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -477,6 +550,81 @@ class TestDetectV3Service:
         assert result["results"][0]["embedding_count"] == 3
         assert result["scan_version"] == "v3"
 
+    @patch("core.detect_v3.get_challenge_v3_service")
+    @patch("core.detect_v3.get_db")
+    @patch("core.detect_v3.get_anti_spoof")
+    @patch("core.detect_v3.get_moire_detector")
+    @patch("core.detect_v3.get_engine")
+    def test_scan_suspicious_match_requires_challenge(
+        self,
+        mock_engine,
+        mock_moire,
+        mock_anti_spoof,
+        mock_db,
+        mock_challenge_service,
+    ):
+        """Suspicious-but-not-blocked frames require challenge before attendance."""
+        from core.detect_v3 import DetectV3Service
+        from core.schemas import DetectedFace, MatchResult, LivenessResult
+
+        engine = MagicMock()
+        engine._ensure_model = MagicMock()
+
+        emb = np.random.randn(512).astype(np.float32)
+        emb /= np.linalg.norm(emb)
+
+        face = DetectedFace(
+            bbox=np.array([100, 100, 300, 300]),
+            landmarks=None,
+            confidence=0.99,
+            aligned_face=np.zeros((112, 112, 3), dtype=np.uint8),
+            embedding=emb,
+        )
+        engine.detect.return_value = [face]
+        engine.match_with_threshold.return_value = MatchResult(
+            matched=True, name="Alice", student_id="S001", score=0.85, index=0
+        )
+        mock_engine.return_value = engine
+
+        detector = MagicMock()
+        detector.analyze_single.return_value = {
+            "moire_score": 0.4,
+            "is_screen": False,
+            "peak_ratio": 2.0,
+            "periodicity": 1.0,
+        }
+        mock_moire.return_value = detector
+
+        anti_spoof = MagicMock()
+        anti_spoof.check.return_value = LivenessResult(is_live=True, score=1.0)
+        mock_anti_spoof.return_value = anti_spoof
+
+        db = MagicMock()
+        db.get_student.return_value = {"id": "S001", "name": "Alice", "class_name": "12A1"}
+        db.get_embedding_count.return_value = 3
+        db.get_session.return_value = {"id": 1, "name": "Math"}
+        mock_db.return_value = db
+
+        challenge_service = MagicMock()
+        challenge_service.create_challenge.return_value = {
+            "id": "challenge-1",
+            "type": "turn_left",
+            "label": "Turn Left",
+            "instruction": "Turn your face to the LEFT",
+            "expires_in": 10,
+            "required_frames": 3,
+        }
+        mock_challenge_service.return_value = challenge_service
+
+        service = DetectV3Service()
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        result = service.scan_attendance(frame, session_id=1)
+
+        assert result["recognized"] == 0
+        assert result["results"][0]["status"] == "challenge_required"
+        assert result["results"][0]["challenge"]["id"] == "challenge-1"
+        db.mark_attendance.assert_not_called()
+
 
 # ═══════════════════════════════════════════════════════════
 #  PHASE 3: API Route Tests
@@ -574,6 +722,97 @@ class TestAPIRoutes:
         assert data["success"] is True
         assert data["total_saved"] == 3
 
+    @patch("app.routes.enrollment_v2.get_enrollment_v2_service")
+    def test_enroll_v2_endpoint_accepts_multi_frame_fields(self, mock_service):
+        """POST /api/enroll/v2 accepts repeated image fields per angle."""
+        from fastapi.testclient import TestClient
+        from main import app
+
+        service = MagicMock()
+        service.enroll_multi_angle.return_value = {
+            "success": True,
+            "message": "Enrolled: Test (3/3 angles)",
+            "phase_results": [],
+            "total_saved": 3,
+            "embeddings_saved": 3,
+        }
+        mock_service.return_value = service
+
+        client = TestClient(app)
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        _, buf = cv2.imencode('.jpg', img)
+        img_bytes = buf.tobytes()
+
+        files = []
+        for angle in ("front", "left", "right"):
+            for idx in range(3):
+                files.append(
+                    (f"image_{angle}", (f"{angle}_{idx}.jpg", io.BytesIO(img_bytes), "image/jpeg"))
+                )
+
+        response = client.post(
+            "/api/enroll/v2",
+            data={"student_id": "HS002", "name": "Multi", "class_name": "12A1"},
+            files=files,
+        )
+
+        assert response.status_code == 200
+        images_arg = service.enroll_multi_angle.call_args.args[3]
+        assert len(images_arg["front"]) == 3
+        assert len(images_arg["left"]) == 3
+        assert len(images_arg["right"]) == 3
+
+    @patch("app.routes.enrollment.get_db")
+    def test_student_photo_rejects_path_outside_face_crops(self, mock_get_db):
+        """Student photo endpoint must not serve arbitrary filesystem paths."""
+        from fastapi.testclient import TestClient
+        from main import app
+
+        db = MagicMock()
+        db.get_student_any.return_value = {
+            "id": "HS_BAD",
+            "name": "Bad Path",
+            "photo_path": str(Path("README.md").resolve()),
+        }
+        mock_get_db.return_value = db
+
+        client = TestClient(app)
+        response = client.get("/api/students/HS_BAD/photo")
+
+        assert response.status_code == 403
+
+    @patch("app.routes.scan_v3.get_challenge_v3_service")
+    def test_scan_v3_challenge_endpoint(self, mock_service):
+        """POST /api/scan/v3/challenge decodes repeated frame files."""
+        from fastapi.testclient import TestClient
+        from main import app
+
+        service = MagicMock()
+        service.verify_challenge.return_value = {
+            "success": True,
+            "challenge_passed": True,
+            "results": [{"status": "present", "student_id": "S001"}],
+        }
+        mock_service.return_value = service
+
+        client = TestClient(app)
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        _, buf = cv2.imencode('.jpg', img)
+        img_bytes = buf.tobytes()
+
+        response = client.post(
+            "/api/scan/v3/challenge",
+            data={"challenge_id": "challenge-1"},
+            files=[
+                ("frames", ("frame1.jpg", io.BytesIO(img_bytes), "image/jpeg")),
+                ("frames", ("frame2.jpg", io.BytesIO(img_bytes), "image/jpeg")),
+            ],
+        )
+
+        assert response.status_code == 200
+        assert response.json()["challenge_passed"] is True
+        assert service.verify_challenge.call_count == 1
+
 
 # ═══════════════════════════════════════════════════════════
 #  Config Tests
@@ -594,8 +833,18 @@ class TestConfig:
         import config
         assert hasattr(config, "DETECT_V3_COSINE_THRESHOLD")
         assert hasattr(config, "DETECT_V3_MOIRE_SCREEN_THRESHOLD")
+        assert hasattr(config, "DETECT_V3_MOIRE_BLOCK_THRESHOLD")
+        assert hasattr(config, "DETECT_V3_MOIRE_CHALLENGE_THRESHOLD")
+        assert hasattr(config, "DETECT_V3_LIVENESS_BLOCK_THRESHOLD")
+        assert hasattr(config, "DETECT_V3_LIVENESS_CHALLENGE_THRESHOLD")
+        assert hasattr(config, "DETECT_V3_CHALLENGE_ENABLED")
+        assert hasattr(config, "DETECT_V3_BLINK_EAR_CLOSED_THRESHOLD")
+        assert hasattr(config, "DETECT_V3_BLINK_EAR_OPEN_THRESHOLD")
+        assert hasattr(config, "DETECT_V3_BLINK_EAR_DELTA")
         assert config.DETECT_V3_COSINE_THRESHOLD == 0.52
-        assert config.DETECT_V3_MOIRE_SCREEN_THRESHOLD == 0.45
+        assert config.DETECT_V3_MOIRE_SCREEN_THRESHOLD == 0.30
+        assert config.DETECT_V3_MOIRE_BLOCK_THRESHOLD < config.DETECT_V3_MOIRE_CHALLENGE_THRESHOLD
+        assert config.DETECT_V3_BLINK_EAR_CLOSED_THRESHOLD < config.DETECT_V3_BLINK_EAR_OPEN_THRESHOLD
 
 
 # ═══════════════════════════════════════════════════════════
