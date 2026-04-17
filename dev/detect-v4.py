@@ -6,6 +6,7 @@ V4 keeps dev/detect-v3.py intact and adds:
   2. Per-face rolling moire decision.
   3. Challenge-first policy for suspicious frames.
   4. Calibration logging for real-world threshold tuning.
+  5. V4.1 screen-context evidence: flat background + glass glare.
 
 This file is intentionally local/OpenCV only. It does not change the web
 dashboard, API contracts, or database schema.
@@ -95,6 +96,30 @@ CHALLENGE_COOLDOWN = 12.0
 # Sau khi pass challenge, bo qua challenge trong N giay.
 # Giam xuong 0-2 khi test replay de khong bi lan pass truoc che loi moi.
 # Tang giup user that do bi hoi challenge lien tuc.
+
+SCREEN_CONTEXT_ENABLED = True
+# Bat/tat bo phat hien nen phang va glare quanh mat.
+# True: them diem nghi ngo voi video dien thoai/man hinh.
+# False: quay lai gan nhu V4 cu chi dung moire/liveness.
+
+SCREEN_CONTEXT_WEIGHT = 0.35
+# Muc anh huong cua context vao diem nghi ngo tong.
+# Tang: video dien thoai de bi SUSPECT hon.
+# Giam: nguoi that it bi challenge nham hon.
+
+FLATNESS_SUSPICIOUS_THRESHOLD = 0.65
+# Nguong nen phang de cong nghi ngo.
+# Giam: nhay hon voi man hinh zoom full mat.
+# Tang: it nghi nham nguoi dung truoc tuong phang.
+
+GLARE_SUSPICIOUS_THRESHOLD = 0.45
+# Nguong phan chieu kinh/man hinh de cong nghi ngo.
+# Giam: bat glare dien thoai nhay hon.
+# Tang: it nghi nham nguoi deo kinh/den manh.
+
+SCREEN_CONTEXT_STRONG_THRESHOLD = 0.78
+# Nguong context rat nghi man hinh.
+# Chi block khi co them moire/passive suspicious; dung mot minh chi challenge.
 
 # GOI Y CHINH NHANH:
 # 1. Video OLED van pass:
@@ -509,6 +534,235 @@ class MoireDetectorV4:
         return clamp((ratio - 1.5) / 3.0)
 
 
+class ScreenContextDetectorV41:
+    """Detect flat screen-like context and glass glare around a face.
+
+    This detector is intentionally conservative: it produces suspicion
+    evidence, not an independent spoof classifier.
+    """
+
+    def analyze(self, frame: np.ndarray, face_bbox: list[int], roi_bbox: list[int]) -> dict[str, Any]:
+        if not SCREEN_CONTEXT_ENABLED:
+            return self._empty("disabled")
+
+        roi = safe_roi(frame, roi_bbox)
+        if roi is None or roi.size == 0:
+            return self._empty("empty_roi")
+
+        local_face_bbox = self._local_bbox(face_bbox, roi_bbox)
+        context_mask = self._context_mask(roi, local_face_bbox)
+        boundary_mask = self._boundary_mask(roi, local_face_bbox)
+
+        flatness = self._flatness_metrics(roi, context_mask, boundary_mask)
+        glare = self._glare_metrics(roi, context_mask)
+
+        flat_score = float(flatness["score"])
+        glare_score = float(glare["score"])
+        score = clamp((flat_score * 0.60 + glare_score * 0.40) * SCREEN_CONTEXT_WEIGHT / 0.35)
+
+        signals = []
+        strong_signals = []
+        if flat_score >= FLATNESS_SUSPICIOUS_THRESHOLD:
+            signals.append("flat_background")
+        if flat_score >= 0.80:
+            strong_signals.append("strong_flat_background")
+        if glare_score >= GLARE_SUSPICIOUS_THRESHOLD:
+            signals.append("specular_glare")
+        if glare_score >= 0.70:
+            strong_signals.append("strong_specular_glare")
+
+        if score >= SCREEN_CONTEXT_STRONG_THRESHOLD and strong_signals:
+            decision = "strong"
+        elif score >= 0.45 or signals:
+            decision = "suspicious"
+        else:
+            decision = "clean"
+
+        return {
+            "score": round(score, 3),
+            "decision": decision,
+            "signals": signals + strong_signals,
+            "flatness": flatness,
+            "glare": glare,
+        }
+
+    def _empty(self, reason: str) -> dict[str, Any]:
+        return {
+            "score": 0.0,
+            "decision": "clean",
+            "signals": [reason] if reason != "disabled" else [],
+            "flatness": {},
+            "glare": {},
+        }
+
+    def _local_bbox(self, face_bbox: list[int], roi_bbox: list[int]) -> list[int]:
+        fx1, fy1, fx2, fy2 = face_bbox
+        rx1, ry1, _, _ = roi_bbox
+        return [fx1 - rx1, fy1 - ry1, fx2 - rx1, fy2 - ry1]
+
+    def _context_mask(self, roi: np.ndarray, local_face_bbox: list[int]) -> np.ndarray:
+        h, w = roi.shape[:2]
+        mask = np.full((h, w), 255, dtype=np.uint8)
+        x1, y1, x2, y2 = self._clip_bbox(local_face_bbox, w, h)
+        pad_x = int((x2 - x1) * 0.08)
+        pad_y = int((y2 - y1) * 0.08)
+        cv2.rectangle(
+            mask,
+            (max(0, x1 - pad_x), max(0, y1 - pad_y)),
+            (min(w - 1, x2 + pad_x), min(h - 1, y2 + pad_y)),
+            0,
+            -1,
+        )
+        return mask
+
+    def _boundary_mask(self, roi: np.ndarray, local_face_bbox: list[int]) -> np.ndarray:
+        h, w = roi.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        x1, y1, x2, y2 = self._clip_bbox(local_face_bbox, w, h)
+        pad = max(4, int(min(x2 - x1, y2 - y1) * 0.08))
+        cv2.rectangle(
+            mask,
+            (max(0, x1 - pad), max(0, y1 - pad)),
+            (min(w - 1, x2 + pad), min(h - 1, y2 + pad)),
+            255,
+            -1,
+        )
+        cv2.rectangle(mask, (x1, y1), (x2, y2), 0, -1)
+        return mask
+
+    def _flatness_metrics(self, roi: np.ndarray, context_mask: np.ndarray, boundary_mask: np.ndarray) -> dict[str, Any]:
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        context_values = gray[context_mask > 0]
+        if context_values.size < 64:
+            return {
+                "score": 0.0,
+                "laplacian_var": 0.0,
+                "gradient_entropy": 0.0,
+                "color_std": 0.0,
+                "edge_density": 0.0,
+                "boundary_edge_strength": 0.0,
+            }
+
+        lap = cv2.Laplacian(gray, cv2.CV_64F)
+        lap_context = lap[context_mask > 0]
+        lap_var = float(np.var(lap_context)) if lap_context.size else 0.0
+
+        sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        grad = cv2.magnitude(sobel_x, sobel_y)
+        grad_context = grad[context_mask > 0]
+        grad_entropy = self._entropy(grad_context, bins=32, value_range=(0, 255))
+
+        color_pixels = roi[context_mask > 0]
+        color_std = float(np.mean(np.std(color_pixels.astype(np.float32), axis=0))) if color_pixels.size else 0.0
+
+        edges = cv2.Canny(gray, 60, 160)
+        edge_density = float(np.mean(edges[context_mask > 0] > 0)) if context_values.size else 0.0
+        boundary_values = grad[boundary_mask > 0]
+        boundary_edge_strength = float(np.mean(boundary_values)) if boundary_values.size else 0.0
+
+        flat_lap = 1.0 - clamp(lap_var / 220.0)
+        flat_entropy = 1.0 - clamp(grad_entropy / 3.2)
+        flat_color = 1.0 - clamp(color_std / 38.0)
+        low_edge = 1.0 - clamp(edge_density / 0.12)
+        sharp_boundary = clamp((boundary_edge_strength - 18.0) / 45.0)
+
+        score = clamp(
+            flat_lap * 0.30
+            + flat_entropy * 0.22
+            + flat_color * 0.20
+            + low_edge * 0.13
+            + sharp_boundary * 0.15
+        )
+
+        return {
+            "score": round(score, 3),
+            "laplacian_var": round(lap_var, 2),
+            "gradient_entropy": round(float(grad_entropy), 3),
+            "color_std": round(color_std, 2),
+            "edge_density": round(edge_density, 3),
+            "boundary_edge_strength": round(boundary_edge_strength, 2),
+        }
+
+    def _glare_metrics(self, roi: np.ndarray, context_mask: np.ndarray) -> dict[str, Any]:
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+        bright = (v > 235).astype(np.uint8) * 255
+        white_specular = ((v > 220) & (s < 70)).astype(np.uint8) * 255
+        mask = cv2.bitwise_or(bright, white_specular)
+        mask = cv2.bitwise_and(mask, context_mask)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        context_area = max(1, int(np.sum(context_mask > 0)))
+        bright_ratio = float(np.sum(mask > 0) / context_area)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        blob_count = 0
+        max_area_ratio = 0.0
+        linear_score = 0.0
+        edge_scores = []
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        grad = cv2.magnitude(
+            cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3),
+            cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3),
+        )
+
+        for contour in contours:
+            area = float(cv2.contourArea(contour))
+            if area < 8:
+                continue
+            blob_count += 1
+            max_area_ratio = max(max_area_ratio, area / context_area)
+            x, y, w, h = cv2.boundingRect(contour)
+            aspect = max(w, h) / max(1, min(w, h))
+            linear_score = max(linear_score, clamp((aspect - 2.0) / 5.0))
+            blob_mask = np.zeros(mask.shape, dtype=np.uint8)
+            cv2.drawContours(blob_mask, [contour], -1, 255, 1)
+            values = grad[blob_mask > 0]
+            if values.size:
+                edge_scores.append(float(np.mean(values)))
+
+        highlight_edge_sharpness = float(np.mean(edge_scores)) if edge_scores else 0.0
+        glare_score = clamp(
+            clamp(bright_ratio / 0.025) * 0.35
+            + clamp(max_area_ratio / 0.018) * 0.25
+            + clamp(blob_count / 4.0) * 0.15
+            + linear_score * 0.15
+            + clamp((highlight_edge_sharpness - 20.0) / 60.0) * 0.10
+        )
+
+        return {
+            "score": round(glare_score, 3),
+            "bright_pixel_ratio": round(bright_ratio, 4),
+            "highlight_blob_count": blob_count,
+            "max_highlight_area_ratio": round(max_area_ratio, 4),
+            "highlight_edge_sharpness": round(highlight_edge_sharpness, 2),
+            "linear_glare_score": round(linear_score, 3),
+        }
+
+    def _clip_bbox(self, bbox: list[int], w: int, h: int) -> list[int]:
+        x1, y1, x2, y2 = bbox
+        return [
+            max(0, min(w - 1, int(x1))),
+            max(0, min(h - 1, int(y1))),
+            max(0, min(w - 1, int(x2))),
+            max(0, min(h - 1, int(y2))),
+        ]
+
+    def _entropy(self, values: np.ndarray, *, bins: int, value_range: tuple[int, int]) -> float:
+        if values.size == 0:
+            return 0.0
+        hist, _ = np.histogram(values, bins=bins, range=value_range)
+        total = float(np.sum(hist))
+        if total <= 0:
+            return 0.0
+        p = hist.astype(np.float32) / total
+        p = p[p > 0]
+        return float(-np.sum(p * np.log2(p)))
+
+
 @dataclass
 class RollingMoireDecision:
     maxlen: int = 18
@@ -714,6 +968,7 @@ class CalibrationLogger:
             "moire_roi_bbox": payload.get("moire_roi_bbox", []),
             "moire": payload.get("moire", {}),
             "rolling": payload.get("rolling", {}),
+            "screen_context": payload.get("screen_context", {}),
             "liveness": payload.get("liveness", {}),
             "passive": payload.get("passive", {}),
             "challenge": payload.get("challenge", {}),
@@ -894,7 +1149,7 @@ def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL
     h, w = frame.shape[:2]
     panel = np.full((h, panel_w, 3), C_PANEL_BG, dtype=np.uint8)
 
-    cv2.putText(panel, "FACE RECOGNITION V4", (S(14), S(28)), FONT, FS(0.55), C_GOLD, 1, cv2.LINE_AA)
+    cv2.putText(panel, "FACE RECOGNITION V4.1", (S(14), S(28)), FONT, FS(0.55), C_GOLD, 1, cv2.LINE_AA)
     cv2.putText(panel, f"Thr: {V4_COSINE_THRESHOLD:.0%}", (panel_w - S(90), S(28)), FONT_SMALL, FS(0.45), C_DIM, 1, cv2.LINE_AA)
     cv2.line(panel, (S(14), S(38)), (panel_w - S(14), S(38)), C_DIM, 1, cv2.LINE_AA)
 
@@ -972,6 +1227,35 @@ def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL
             cv2.putText(panel, f"  Pk:{moire.get('peak_ratio', 0):.1f} Pd:{moire.get('periodicity', 0):.1f} Gr:{moire.get('grid_score', 0):.2f}", (S(14), y), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
             y += S(18)
 
+        screen_context = r.get("screen_context", {})
+        if screen_context:
+            ctx_decision = screen_context.get("decision", "clean")
+            ctx_color = C_SPOOF if ctx_decision == "strong" else (C_ORANGE if ctx_decision == "suspicious" else C_PRESENT)
+            cv2.putText(
+                panel,
+                f"Context V4.1: {ctx_decision.upper()} {screen_context.get('score', 0):.2f}",
+                (S(14), y),
+                FONT_SMALL,
+                FS(0.45),
+                ctx_color,
+                1,
+                cv2.LINE_AA,
+            )
+            y += S(18)
+            flat = screen_context.get("flatness", {})
+            glare = screen_context.get("glare", {})
+            cv2.putText(
+                panel,
+                f"  Flat:{flat.get('score', 0):.2f} Glare:{glare.get('score', 0):.2f}",
+                (S(14), y),
+                FONT_SMALL,
+                FS(0.40),
+                C_DIM,
+                1,
+                cv2.LINE_AA,
+            )
+            y += S(18)
+
         quality = r.get("quality")
         if quality:
             cv2.putText(panel, f"Blur: {quality['blur']:.0f}  Bright: {quality['bright']:.0f}", (S(14), y), FONT_SMALL, FS(0.42), C_DIM, 1, cv2.LINE_AA)
@@ -1024,6 +1308,10 @@ def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL
             signals = ", ".join(moire.get("strong_signals", [])[:3])
             cv2.putText(panel, signals[:42], (S(14), y), FONT_SMALL, FS(0.32), C_ORANGE, 1, cv2.LINE_AA)
             y += S(18)
+            ctx_signals = ", ".join(screen_context.get("signals", [])[:3])
+            if ctx_signals:
+                cv2.putText(panel, ctx_signals[:42], (S(14), y), FONT_SMALL, FS(0.32), C_ORANGE, 1, cv2.LINE_AA)
+                y += S(18)
 
         cv2.line(panel, (S(14), y), (panel_w - S(14), y), (60, 60, 65), 1)
         y += S(14)
@@ -1064,6 +1352,7 @@ def process_face(
     anti_spoof: Any,
     liveness: StreamingLivenessTracker,
     moire_detector: MoireDetectorV4,
+    context_detector: ScreenContextDetectorV41,
     rolling_by_face: dict[int, RollingMoireDecision],
     last_moire: dict[int, dict[str, Any]],
     last_rolling: dict[int, dict[str, Any]],
@@ -1087,6 +1376,7 @@ def process_face(
     live = liveness.get_liveness(bbox)
     passive = anti_spoof.check(frame, face.bbox)
     passive_status = passive_decision(float(passive.score))
+    screen_context = context_detector.analyze(frame, bbox, moire_roi_bbox)
     metrics = engine.get_face_metrics(frame, face)
     match = engine.match_with_threshold(face.embedding, V4_COSINE_THRESHOLD)
 
@@ -1109,6 +1399,15 @@ def process_face(
         name = "SPOOF"
         label = live.get("message", "Liveness failed")
         extra = f"Blinks:{live.get('blinks', 0)} Track:{live.get('track_time', 0):.1f}s"
+        color = C_SPOOF
+    elif (
+        screen_context.get("decision") == "strong"
+        and (rolling.get("decision") == "suspicious" or passive_status == "suspicious")
+    ):
+        status = "spoof"
+        name = "SPOOF"
+        label = "Screen context strong"
+        extra = ", ".join(screen_context.get("signals", [])[:3])
         color = C_SPOOF
     elif passive_status == "block":
         status = "spoof"
@@ -1135,6 +1434,8 @@ def process_face(
         suspicious_reasons = []
         if rolling.get("decision") == "suspicious":
             suspicious_reasons.append("moire suspicious")
+        if screen_context.get("decision") in {"suspicious", "strong"}:
+            suspicious_reasons.append(f"context {screen_context.get('decision')}")
         if passive_status == "suspicious":
             suspicious_reasons.append(f"passive {passive.score:.2f}")
         if challenge.fail_count >= 2:
@@ -1178,7 +1479,7 @@ def process_face(
         if status == "present":
             name = match.name
             label = f"ID:{match.student_id} Conf:{match.score:.0%}"
-            extra = f"Emb:{emb_count} Moire:{rolling.get('decision')} Live:OK"
+            extra = f"Emb:{emb_count} Moire:{rolling.get('decision')} Ctx:{screen_context.get('decision')} Live:OK"
             color = C_PRESENT
         elif status == "challenge":
             name = "VERIFY"
@@ -1221,6 +1522,7 @@ def process_face(
         },
         "moire": moire,
         "rolling": rolling,
+        "screen_context": screen_context,
         "liveness": live,
         "passive": {
             "score": float(passive.score),
@@ -1248,7 +1550,7 @@ def process_face(
 def main():
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     print("=" * 72)
-    print("  Detect V4 Research - Multi-band moire + rolling + challenge-first")
+    print("  Detect V4.1 Research - Moire + screen context + challenge-first")
     print("=" * 72)
     print("This script is local/OpenCV only and does not change production web.")
 
@@ -1261,6 +1563,7 @@ def main():
     anti_spoof = get_anti_spoof()
     liveness = StreamingLivenessTracker()
     moire_detector = MoireDetectorV4()
+    context_detector = ScreenContextDetectorV41()
     challenge = ChallengeControllerV4()
     cal_logger = CalibrationLogger(METRICS_LOG_PATH)
 
@@ -1282,7 +1585,7 @@ def main():
         print(f"ERROR: Cannot open camera index {CAM_INDEX}")
         return
 
-    win_name = "Live Face Detection V4"
+    win_name = "Live Face Detection V4.1"
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
     total_w = FRAME_W + INFO_PANEL_W
     total_h = FRAME_H
@@ -1355,6 +1658,7 @@ def main():
                             anti_spoof=anti_spoof,
                             liveness=liveness,
                             moire_detector=moire_detector,
+                            context_detector=context_detector,
                             rolling_by_face=rolling_by_face,
                             last_moire=last_moire,
                             last_rolling=last_rolling,
@@ -1405,7 +1709,7 @@ def main():
                 cal_logger.enabled,
                 debug_enabled,
             )
-            perf_text = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  FFT:128  Skip:{MOIRE_EVERY_N_DETECT - 1}/{MOIRE_EVERY_N_DETECT}  View:{policy_views[policy_view_index]}"
+            perf_text = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  FFT:128  Ctx:ON  Skip:{MOIRE_EVERY_N_DETECT - 1}/{MOIRE_EVERY_N_DETECT}  View:{policy_views[policy_view_index]}"
             cv2.putText(frame, perf_text, (S(14), S(78)), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
 
             display_frame = (
