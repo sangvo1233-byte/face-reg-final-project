@@ -4,7 +4,7 @@ import { checkSessionStatus, hideSummary, uiEndSession, uiStartSession } from '.
 import { archiveStudent, loadStudents, openEditModal, restoreStudent, saveStudentEdit, setStudentView, showStudentDetail } from './students.js';
 import { captureEnrollFrame, closeEnrollCameraModal, proceedToCameraEnroll, proceedToManualEnroll, retakeAngle, showStudentCreateModal, startReEnroll, submitEnroll, validateManualFile } from './enrollment.js';
 import { hideDetail, loadHistory, showHistoryDetail } from './history.js';
-import { setCameraSource, skipAttendanceSuccessOverlay, testAttendanceSuccessOverlay, toggleDemoVideo, updateAutoScanInterval } from './scan.js';
+import { initializeScanMode, setCameraSource, setScanMode, skipAttendanceSuccessOverlay, testAttendanceSuccessOverlay, toggleDemoVideo, updateAutoScanInterval } from './scan.js';
 
 function exposeGlobals() {
     Object.assign(window, {
@@ -32,6 +32,7 @@ function exposeGlobals() {
         submitEnroll,
         hideDetail,
         showHistoryDetail,
+        setScanMode,
         setCameraSource,
         skipAttendanceSuccessOverlay,
         testAttendanceSuccessOverlay,
@@ -40,13 +41,14 @@ function exposeGlobals() {
     });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     exposeGlobals();
     document.documentElement.setAttribute('data-theme', state.currentTheme);
     setupTabs();
     updateClock();
     setInterval(updateClock, 1000);
-    checkSessionStatus();
+    await initializeScanMode();
+    await checkSessionStatus();
     loadStudents('active');
     loadHistory();
 });

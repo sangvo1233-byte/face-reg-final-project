@@ -2,7 +2,7 @@ import { api } from './api.js';
 import { state } from './state.js';
 import { confirmDialog, hideElement, hideLoading, showElement, showLoading, showToast } from './ui.js';
 import { loadHistory } from './history.js';
-import { checkAutoScanStatus, setCameraSource, stopAutoScan, updateScanLogs } from './scan.js';
+import { checkAutoScanStatus, stopAutoScan, updateScanLogs } from './scan.js';
 
 export async function checkSessionStatus() {
     try {
@@ -23,7 +23,7 @@ export async function checkSessionStatus() {
             hideElement(input);
             hideElement('btn-start');
             showElement('btn-stop', 'inline-flex');
-            checkAutoScanStatus();
+            await checkAutoScanStatus();
         } else {
             state.sessionActive = false;
             headerStatus.textContent = 'Idle';
@@ -61,8 +61,7 @@ export async function uiStartSession() {
             state.scanCount = 0;
             updateScanLogs();
             hideElement('end-session-summary');
-            checkSessionStatus();
-            setCameraSource('webcam');
+            await checkSessionStatus();
         } else {
             showToast(data.message, 'error');
         }

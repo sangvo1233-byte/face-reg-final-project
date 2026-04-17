@@ -14,6 +14,7 @@ import io
 import cv2
 import numpy as np
 from pathlib import Path
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 # Setup path
@@ -651,6 +652,12 @@ class TestAPIRoutes:
         assert "scan_versions" in data
         assert "v1" in data["scan_versions"]
         assert "v3" in data["scan_versions"]
+        assert "local_direct" in data["scan_versions"]
+        assert data["scan_mode_default"] == "auto"
+        assert "auto" in data["scan_modes"]
+        assert "browser_ws" in data["scan_modes"]
+        assert "local_direct_available" in data
+        assert "browser_stream_available" in data
 
         assert "features" in data
         assert data["features"]["moire_detection"] is True
@@ -813,10 +820,276 @@ class TestAPIRoutes:
         assert response.json()["challenge_passed"] is True
         assert service.verify_challenge.call_count == 1
 
+    @patch("app.routes.scan_v3.ScanV3StreamSession")
+    @patch("app.routes.scan_v3.get_db")
+    def test_scan_v3_websocket_endpoint(self, mock_db, mock_stream_cls):
+        """WS /ws/scan-v3 decodes frame bytes and processes stream state."""
+        from fastapi.testclient import TestClient
+        from main import app
+
+        db = MagicMock()
+        db.get_active_session.return_value = {"id": 7, "status": "active"}
+        mock_db.return_value = db
+
+        stream = MagicMock()
+        stream.process_frame.return_value = [{
+            "type": "scan_state",
+            "status": "checking",
+            "message": "Tracking liveness...",
+        }]
+        mock_stream_cls.return_value = stream
+
+        client = TestClient(app)
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        _, buf = cv2.imencode('.jpg', img)
+        img_bytes = buf.tobytes()
+
+        with client.websocket_connect("/ws/scan-v3") as ws:
+            ready = ws.receive_json()
+            assert ready["type"] == "stream_ready"
+            assert ready["session_id"] == 7
+
+            ws.send_bytes(img_bytes)
+            message = ws.receive_json()
+            assert message["status"] == "checking"
+
+        mock_stream_cls.assert_called_once_with(7)
+        assert stream.process_frame.call_count == 1
+        stream.close.assert_called_once()
+
 
 # ═══════════════════════════════════════════════════════════
 #  Config Tests
 # ═══════════════════════════════════════════════════════════
+
+class TestScanV3StreamSession:
+    """Test dev-like WebSocket Scan V3 stream decisions with mocked dependencies."""
+
+    def _make_face(self):
+        from core.schemas import DetectedFace
+
+        emb = np.ones(512, dtype=np.float32)
+        emb /= np.linalg.norm(emb)
+        return DetectedFace(
+            bbox=np.array([100, 100, 300, 300]),
+            landmarks=None,
+            confidence=0.99,
+            aligned_face=np.zeros((112, 112, 3), dtype=np.uint8),
+            embedding=emb,
+        )
+
+    @contextmanager
+    def _mock_stream(
+        self,
+        *,
+        live_state: dict | None = None,
+        moire_score: float = 0.9,
+        passive_score: float = 1.0,
+        matched: bool = True,
+    ):
+        import config
+        from core.schemas import LivenessResult, MatchResult
+        from core.stream_scan_v3 import ScanV3StreamSession
+
+        live = live_state or {
+            "state": "live",
+            "message": "Live face confirmed",
+            "score": 1.0,
+            "blinks": 1,
+            "ear": 0.28,
+            "track_time": 2.1,
+            "frames": 20,
+        }
+
+        with patch("core.runtime_v3.get_db") as mock_get_db, \
+             patch("core.runtime_v3.get_engine") as mock_get_engine, \
+             patch("core.runtime_v3.get_anti_spoof") as mock_anti_spoof, \
+             patch("core.runtime_v3.get_detect_v3_service") as mock_service, \
+             patch("core.runtime_v3.StreamingLivenessTracker") as mock_liveness_cls, \
+             patch("core.runtime_v3.MoireDetector") as mock_moire_cls, \
+             patch("core.runtime_v3.random.choice", return_value="blink"):
+
+            db = MagicMock()
+            db.get_session.return_value = {"id": 7, "name": "Math"}
+            db.get_student.return_value = {"id": "S001", "name": "Alice", "class_name": "12A1"}
+            db.get_embedding_count.return_value = 3
+            mock_get_db.return_value = db
+
+            engine = MagicMock()
+            engine.detect.return_value = [self._make_face()]
+            engine.match_with_threshold.return_value = MatchResult(
+                matched=matched,
+                name="Alice" if matched else "Unknown",
+                student_id="S001" if matched else "",
+                score=0.91 if matched else 0.31,
+                index=0 if matched else -1,
+            )
+            mock_get_engine.return_value = engine
+
+            anti_spoof = MagicMock()
+            anti_spoof.check.return_value = LivenessResult(
+                is_live=passive_score >= config.DETECT_V3_LIVENESS_BLOCK_THRESHOLD,
+                score=passive_score,
+                reason="pass" if passive_score >= config.DETECT_V3_LIVENESS_CHALLENGE_THRESHOLD else "passive suspicious",
+            )
+            mock_anti_spoof.return_value = anti_spoof
+
+            liveness = MagicMock()
+            liveness.process_frame.return_value = live
+            liveness.get_liveness.return_value = live
+            mock_liveness_cls.return_value = liveness
+
+            moire_detector = MagicMock()
+            moire_detector.analyze.return_value = {
+                "moire_score": moire_score,
+                "is_screen": moire_score < config.DETECT_V3_MOIRE_BLOCK_THRESHOLD,
+                "peak_ratio": 1.0,
+                "periodicity": 0.2,
+                "grid_score": 0.0,
+            }
+            mock_moire_cls.return_value = moire_detector
+
+            service = MagicMock()
+            service.bbox_list.side_effect = lambda bbox: [int(v) for v in bbox[:4]]
+            service.moire_decision.side_effect = self._moire_decision
+            service.liveness_decision.side_effect = self._passive_decision
+            service.challenge_reason.side_effect = self._challenge_reason
+            service.candidate_from_match.side_effect = lambda match, student, emb_count, bbox: {
+                "name": match.name,
+                "student_id": match.student_id,
+                "class_name": student.get("class_name", ""),
+                "confidence": match.score,
+                "bbox": bbox,
+                "embedding_count": emb_count,
+                "enroll_type": "multi_angle_v2",
+            }
+            service.record_attendance_result.side_effect = lambda **kwargs: {
+                "status": "present",
+                "message": "Alice - Present",
+                "student_id": kwargs["match"].student_id,
+                "name": kwargs["match"].name,
+                "class_name": kwargs["student"].get("class_name", ""),
+                "confidence": kwargs["match"].score,
+                "session_id": kwargs["session_id"],
+                "session_name": kwargs["session"]["name"],
+                "evidence_url": "/api/evidence/test.jpg",
+                "moire_score": kwargs["moire_score"],
+                "moire_is_screen": False,
+                "liveness_score": kwargs["liveness_score"],
+            }
+            service.spoof_result.side_effect = lambda **kwargs: {
+                "status": "spoof",
+                "message": kwargs["message"],
+                "student_id": "",
+                "name": "Unknown",
+                "confidence": 0,
+                "bbox": kwargs["bbox"],
+                "moire_score": kwargs["moire_score"],
+                "moire_is_screen": kwargs["moire_is_screen"],
+                "liveness_score": kwargs["liveness_score"],
+            }
+            service.unknown_result.side_effect = lambda **kwargs: {
+                "status": "unknown",
+                "message": "No match",
+                "student_id": "",
+                "name": "Unknown",
+                "confidence": kwargs["match"].score,
+                "bbox": kwargs["bbox"],
+                "moire_score": kwargs["moire_score"],
+                "moire_is_screen": False,
+                "liveness_score": kwargs["liveness_score"],
+            }
+            mock_service.return_value = service
+
+            stream = ScanV3StreamSession(7)
+            try:
+                yield stream, {
+                    "engine": engine,
+                    "service": service,
+                    "liveness": liveness,
+                    "moire": moire_detector,
+                    "db": db,
+                }
+            finally:
+                stream.close()
+
+    def _moire_decision(self, score, result):
+        import config
+        if score < config.DETECT_V3_MOIRE_BLOCK_THRESHOLD:
+            return {"action": "block", "reason": "screen detected"}
+        if score < config.DETECT_V3_MOIRE_CHALLENGE_THRESHOLD:
+            return {"action": "challenge", "reason": "moire pattern suspicious"}
+        return {"action": "pass", "reason": ""}
+
+    def _passive_decision(self, score, reason):
+        import config
+        if score < config.DETECT_V3_LIVENESS_BLOCK_THRESHOLD:
+            return {"action": "block", "reason": reason}
+        if score < config.DETECT_V3_LIVENESS_CHALLENGE_THRESHOLD:
+            return {"action": "challenge", "reason": reason}
+        return {"action": "pass", "reason": ""}
+
+    def _challenge_reason(self, *decisions):
+        return "; ".join(
+            d["reason"] for d in decisions
+            if d.get("action") == "challenge" and d.get("reason")
+        )
+
+    def test_stream_waits_for_liveness_before_matching(self):
+        live = {
+            "state": "checking",
+            "message": "Tracking liveness...",
+            "score": 0.2,
+            "blinks": 0,
+            "ear": 0.28,
+            "track_time": 0.5,
+            "frames": 4,
+        }
+        with self._mock_stream(live_state=live) as (stream, deps):
+            message = stream.process_frame(np.zeros((480, 640, 3), dtype=np.uint8))[0]
+
+        assert message["type"] == "scan_state"
+        assert message["status"] == "checking"
+        assert message["faces_detected"] == 1
+        deps["engine"].match_with_threshold.assert_not_called()
+
+    def test_stream_no_blink_spoof_blocks_before_matching(self):
+        live = {
+            "state": "spoof",
+            "message": "No blink detected",
+            "score": 0.0,
+            "blinks": 0,
+            "ear": 0.28,
+            "track_time": 6.2,
+            "frames": 60,
+        }
+        with self._mock_stream(live_state=live) as (stream, deps):
+            message = stream.process_frame(np.zeros((480, 640, 3), dtype=np.uint8))[0]
+
+        assert message["type"] == "scan_state"
+        assert message["status"] == "spoof"
+        assert message["message"] == "No blink detected"
+        deps["engine"].match_with_threshold.assert_not_called()
+
+    def test_stream_live_present_records_attendance(self):
+        with self._mock_stream(moire_score=0.9, passive_score=1.0, matched=True) as (stream, deps):
+            message = stream.process_frame(np.zeros((480, 640, 3), dtype=np.uint8))[0]
+
+        assert message["type"] == "attendance"
+        assert message["status"] == "present"
+        assert message["student_id"] == "S001"
+        assert message["match"]["confidence"] == 0.91
+        deps["service"].record_attendance_result.assert_called_once()
+
+    def test_stream_suspicious_moire_requires_challenge(self):
+        with self._mock_stream(moire_score=0.35, passive_score=1.0, matched=True) as (stream, deps):
+            message = stream.process_frame(np.zeros((480, 640, 3), dtype=np.uint8))[0]
+
+        assert message["type"] == "challenge_required"
+        assert message["status"] == "challenge_required"
+        assert message["challenge"]["type"] == "blink"
+        deps["service"].record_attendance_result.assert_not_called()
+
 
 class TestConfig:
     """Verify V2/V3 config constants exist."""
@@ -841,10 +1114,28 @@ class TestConfig:
         assert hasattr(config, "DETECT_V3_BLINK_EAR_CLOSED_THRESHOLD")
         assert hasattr(config, "DETECT_V3_BLINK_EAR_OPEN_THRESHOLD")
         assert hasattr(config, "DETECT_V3_BLINK_EAR_DELTA")
+        assert hasattr(config, "DETECT_V3_STREAM_ENABLED")
+        assert hasattr(config, "DETECT_V3_STREAM_TARGET_FPS")
+        assert hasattr(config, "DETECT_V3_STREAM_DETECT_FPS")
+        assert hasattr(config, "DETECT_V3_STREAM_MOIRE_EVERY_N_DETECT")
+        assert hasattr(config, "DETECT_V3_STREAM_CLIENT_FRAME_WIDTH")
+        assert hasattr(config, "DETECT_V3_STREAM_CLIENT_JPEG_QUALITY")
+        assert hasattr(config, "DETECT_V3_STREAM_MIN_TRACK_SECONDS")
+        assert hasattr(config, "DETECT_V3_STREAM_MAX_CHECK_SECONDS")
+        assert hasattr(config, "DETECT_V3_STREAM_BLINK_MIN_DROP")
+        assert hasattr(config, "DETECT_V3_STREAM_BLINK_MIN_OPEN_FRAMES")
+        assert hasattr(config, "DETECT_V3_STREAM_BLINK_MIN_CLOSED_FRAMES")
+        assert hasattr(config, "DETECT_V3_STREAM_LIVE_MIN_FRAMES")
         assert config.DETECT_V3_COSINE_THRESHOLD == 0.52
         assert config.DETECT_V3_MOIRE_SCREEN_THRESHOLD == 0.30
         assert config.DETECT_V3_MOIRE_BLOCK_THRESHOLD < config.DETECT_V3_MOIRE_CHALLENGE_THRESHOLD
         assert config.DETECT_V3_BLINK_EAR_CLOSED_THRESHOLD < config.DETECT_V3_BLINK_EAR_OPEN_THRESHOLD
+        assert config.DETECT_V3_STREAM_TARGET_FPS > 0
+        assert config.DETECT_V3_STREAM_DETECT_FPS == 10
+        assert config.DETECT_V3_STREAM_MOIRE_EVERY_N_DETECT == 3
+        assert config.DETECT_V3_STREAM_CLIENT_FRAME_WIDTH == 960
+        assert config.DETECT_V3_STREAM_CLIENT_JPEG_QUALITY == 0.82
+        assert config.DETECT_V3_STREAM_BLINK_MIN_DROP > config.DETECT_V3_BLINK_EAR_DELTA
 
 
 # ═══════════════════════════════════════════════════════════

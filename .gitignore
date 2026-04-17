@@ -62,3 +62,7 @@ desktop.ini
 
 # Pytest temp cache
 pytest-cache-files-*/
+.pytest_cache/
+
+# Test result artifacts
+tests/test_result.txt

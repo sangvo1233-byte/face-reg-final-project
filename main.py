@@ -20,7 +20,26 @@ async def lifespan(app: FastAPI):
         logger.info("Models preloaded successfully")
     except Exception as e:
         logger.warning(f"Model preload failed: {e}")
+
+    try:
+        from core.camera import get_camera
+        get_camera().start()
+        logger.info("Camera service started")
+    except Exception as e:
+        logger.warning(f"Camera service start failed: {e}")
+
     yield
+
+    try:
+        from core.local_runner import get_local_runner
+        get_local_runner().stop()
+    except Exception:
+        pass
+    try:
+        from core.camera import get_camera
+        get_camera().stop()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="Điểm Danh Học Sinh", version="1.0", lifespan=lifespan)

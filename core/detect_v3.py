@@ -200,6 +200,130 @@ class DetectV3Service:
             "challenge_required": False,
         }
 
+    def record_attendance_result(
+        self,
+        *,
+        frame: np.ndarray,
+        session_id: int,
+        session: dict | None,
+        match: Any,
+        student: dict,
+        emb_count: int,
+        bbox: list[int],
+        moire_score: float,
+        liveness_score: float,
+    ) -> dict[str, Any]:
+        """Public wrapper used by the WebSocket stream pipeline."""
+        return self._record_attendance(
+            frame=frame,
+            session_id=session_id,
+            session=session,
+            match=match,
+            student=student,
+            emb_count=emb_count,
+            bbox=bbox,
+            moire_score=moire_score,
+            liveness_score=liveness_score,
+        )
+
+    def challenge_required_result(
+        self,
+        *,
+        session_id: int,
+        session: dict | None,
+        candidate: dict[str, Any],
+        bbox: list[int],
+        reason: str,
+        moire_score: float,
+        moire_result: dict,
+        liveness_score: float,
+        liveness_reason: str,
+    ) -> dict[str, Any]:
+        """Public wrapper used by the WebSocket stream pipeline."""
+        return self._challenge_required_result(
+            session_id=session_id,
+            session=session,
+            candidate=candidate,
+            bbox=bbox,
+            reason=reason,
+            moire_score=moire_score,
+            moire_result=moire_result,
+            liveness_score=liveness_score,
+            liveness_reason=liveness_reason,
+        )
+
+    def spoof_result(
+        self,
+        *,
+        bbox: list[int],
+        message: str,
+        moire_score: float,
+        moire_is_screen: bool,
+        liveness_score: float | None,
+    ) -> dict[str, Any]:
+        """Public wrapper used by the WebSocket stream pipeline."""
+        return self._spoof_result(
+            bbox=bbox,
+            message=message,
+            moire_score=moire_score,
+            moire_is_screen=moire_is_screen,
+            liveness_score=liveness_score,
+        )
+
+    def unknown_result(
+        self,
+        *,
+        bbox: list[int],
+        match: Any,
+        moire_score: float,
+        liveness_score: float,
+    ) -> dict[str, Any]:
+        return {
+            "name": "Unknown",
+            "student_id": "",
+            "confidence": match.score,
+            "status": "unknown",
+            "message": (
+                f"No match (score={match.score:.3f}, "
+                f"threshold={config.DETECT_V3_COSINE_THRESHOLD})"
+            ),
+            "bbox": bbox,
+            "moire_score": moire_score,
+            "moire_is_screen": False,
+            "liveness_score": liveness_score,
+            "challenge_required": False,
+        }
+
+    def candidate_from_match(
+        self,
+        *,
+        match: Any,
+        student: dict,
+        emb_count: int,
+        bbox: list[int],
+    ) -> dict[str, Any]:
+        return {
+            "name": match.name,
+            "student_id": match.student_id,
+            "class_name": student.get("class_name", ""),
+            "confidence": match.score,
+            "bbox": bbox,
+            "embedding_count": emb_count,
+            "enroll_type": "multi_angle_v2" if emb_count >= 3 else "single",
+        }
+
+    def moire_decision(self, score: float, result: dict) -> dict[str, str]:
+        return self._moire_decision(score, result)
+
+    def liveness_decision(self, score: float, reason: str) -> dict[str, str]:
+        return self._liveness_decision(score, reason)
+
+    def challenge_reason(self, *decisions: dict[str, str]) -> str:
+        return self._challenge_reason(*decisions)
+
+    def bbox_list(self, bbox: Any) -> list[int]:
+        return self._bbox_list(bbox)
+
     def _challenge_required_result(
         self,
         *,

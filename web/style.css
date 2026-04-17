@@ -990,6 +990,7 @@ tbody td strong {
 .settings-card-header .material-symbols-outlined { color: var(--primary-container); }
 .settings-card-header h3 { font-weight: 700; font-size: 0.875rem; color: var(--on-surface); margin: 0; }
 .settings-card-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.settings-mode-group { display: flex; flex-direction: column; gap: 8px; }
 .source-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .btn-demo { font-size: 0.82rem; font-weight: 600; padding: 10px 20px; border-radius: var(--radius-md); border: 1px solid rgba(52, 71, 235, 0.25); background: rgba(52, 120, 246, 0.08); color: var(--tertiary); cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; justify-content: center; gap: 6px; line-height: 1; }
 .interval-row { display: flex; align-items: center; gap: 12px; }
@@ -1000,6 +1001,7 @@ tbody td strong {
 .source-info-icon { color: var(--primary-container); }
 .source-info-label { font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--on-surface-variant); margin: 0; }
 .source-info-value { font-size: 0.82rem; font-weight: 500; color: var(--on-surface); margin: 0; }
+.scan-mode-note { margin: 0; color: var(--on-surface-variant); font-size: 0.78rem; line-height: 1.45; }
 .source-check { font-size: 18px; color: var(--primary-container); font-variation-settings: 'FILL' 1; }
 .phone-status { margin-left: 4px; display: none; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--on-surface-variant); }
 .system-section-label { font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--on-surface-variant); margin-bottom: 12px; }

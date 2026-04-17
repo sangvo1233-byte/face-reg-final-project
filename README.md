@@ -1,6 +1,6 @@
 # Face Attendance System
 
-Real-time face attendance system built with FastAPI, InsightFace ArcFace embeddings, SQLite, and a vanilla JavaScript web dashboard. The current production web flow uses multi-angle enrollment, Scan V3 recognition, passive anti-spoofing, and active challenge verification for suspicious scans.
+Real-time face attendance system built with FastAPI, InsightFace ArcFace embeddings, SQLite, and a vanilla JavaScript web dashboard. The current production web flow uses multi-angle enrollment, Scan V3 recognition, WebSocket streaming liveness, passive anti-spoofing, and active challenge verification for suspicious scans.
 
 ---
 
@@ -16,7 +16,8 @@ The project has two main usage paths:
 The web dashboard is the current default path. It uses:
 
 - `/api/enroll/v2` for camera/manual multi-angle enrollment.
-- `/api/scan/v3` for attendance scanning.
+- `/ws/scan-v3` for default browser-camera attendance scanning with continuous liveness tracking.
+- `/api/scan/v3` for compatibility single-frame scanning.
 - `/api/scan/v3/challenge` for suspicious-frame active verification.
 - Modular frontend files under `web/js/`.
 
@@ -25,11 +26,14 @@ The web dashboard is the current default path. It uses:
 ## Production Web Flow
 
 ```text
-Camera frame
-  -> InsightFace face detection
+Browser camera frame stream over WebSocket
+  -> MediaPipe FaceLandmarker Tasks API liveness on every frame
+  -> InsightFace face detection at 10 FPS
+  -> Match liveness track back to each detected bbox
   -> ArcFace embedding extraction
-  -> Moire score check
+  -> Rolling moire score check every 3 detect cycles
   -> Passive liveness score check
+  -> If no blink after timeout: block as spoof
   -> Cosine match against active embeddings
   -> If clean: mark attendance
   -> If suspicious: create active challenge
@@ -55,8 +59,8 @@ Not implemented in production web yet: smile, nod, wink, multi-step challenge se
 ### Dashboard
 
 - Start and end attendance sessions.
-- Camera source selection: server webcam, browser camera, phone camera, demo video.
-- Auto scan using Scan V3.
+- Camera source selection: browser camera for live Scan V3, plus server webcam, phone camera, and demo video utilities.
+- Auto scan using continuous WebSocket Scan V3.
 - Attendance log showing student names, IDs, and classes.
 - In-camera success confirmation overlay with face evidence, student info, confidence, session, and countdown.
 - In-camera challenge overlay with action cue for left/right/blink.
@@ -95,6 +99,7 @@ Production web anti-spoofing is implemented in layers:
 | Layer | File | Purpose |
 |---|---|---|
 | Moire FFT | `core/moire.py` | Detect screen replay artifacts |
+| Streaming liveness | `core/liveness.py` | Dev-style continuous EAR blink and movement verification |
 | Passive liveness | `core/anti_spoof.py` | Texture, reflection, and color heuristics |
 | Active challenge | `core/challenge_v3.py` | Require left/right/blink response when suspicious |
 | Scan orchestration | `core/detect_v3.py` | Decide pass, block, challenge, or unknown |
@@ -108,7 +113,7 @@ DETECT_V3_LIVENESS_BLOCK_THRESHOLD = 0.32
 DETECT_V3_LIVENESS_CHALLENGE_THRESHOLD = 0.50
 ```
 
-The standalone research scripts in `dev/` contain additional challenge ideas such as smile, nod, wink, and FaceLandmarker-based tracking. Those are not the current production web path unless explicitly integrated into `core/challenge_v3.py`.
+The standalone research scripts in `dev/` contain additional challenge ideas such as smile, nod, and wink. Production web now uses the same core browser stream shape as `dev/detect-v3.py`: continuous FaceLandmarker blink tracking, bbox-aware liveness lookup, 10 FPS recognition cadence, and rolling moire. It still intentionally limits active challenge actions to blink, turn left, and turn right.
 
 ---
 
@@ -141,9 +146,10 @@ face-reg-finnal-project/
 |   |-- detect_v3.py              Scan V3 orchestration
 |   |-- enrollment_v2.py          Multi-angle enrollment service
 |   |-- face_engine.py            InsightFace detection, embeddings, matching
-|   |-- liveness.py               Optional MediaPipe FaceLandmarker tracker
+|   |-- liveness.py               MediaPipe blink/movement liveness trackers
 |   |-- moire.py                  FFT moire detector
 |   |-- schemas.py                Dataclass result models
+|   |-- stream_scan_v3.py         WebSocket Scan V3 stream session
 |
 |-- web/
 |   |-- index.html                Main dashboard
@@ -205,9 +211,9 @@ For GPU acceleration, install an appropriate `onnxruntime-gpu` build instead of 
 
 ### MediaPipe Notes
 
-Production blink challenge uses `mediapipe.solutions.face_mesh`, which is provided by the `mediapipe` package.
+Production streaming liveness uses MediaPipe FaceLandmarker Tasks API from the `mediapipe` package.
 
-`models/face_landmarker.task` is only required if you use `core/liveness.py` or the FaceLandmarker research path in `dev/`.
+`models/face_landmarker.task` is required for `/ws/scan-v3` streaming liveness, the optional `MultiFrameLiveness` path, and the research scripts in `dev/`.
 
 Optional FaceLandmarker download:
 
@@ -289,7 +295,8 @@ When using Cloudflare, browser camera permissions require HTTPS, so the tunnel U
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `POST` | `/api/scan` | Legacy V1 scan |
-| `POST` | `/api/scan/v3` | Default web scan API |
+| `POST` | `/api/scan/v3` | Compatibility single-frame Scan V3 API |
+| `WS` | `/ws/scan-v3` | Default browser-camera Scan V3 stream with stateful liveness |
 | `POST` | `/api/scan/v3/challenge` | Verify suspicious scan with frame batch |
 
 ### Camera / System
@@ -324,6 +331,13 @@ All main settings live in `config.py`.
 | `DETECT_V3_CHALLENGE_MAX_FRAMES` | `36` | Maximum challenge frames analyzed |
 | `DETECT_V3_BLINK_EAR_CLOSED_THRESHOLD` | `0.21` | Blink closed-eye EAR threshold |
 | `DETECT_V3_BLINK_EAR_OPEN_THRESHOLD` | `0.24` | Blink open-eye EAR threshold |
+| `DETECT_V3_STREAM_TARGET_FPS` | `10` | Browser frame send target for `/ws/scan-v3` |
+| `DETECT_V3_STREAM_DETECT_FPS` | `10` | Max recognition checks per second in the stream |
+| `DETECT_V3_STREAM_MOIRE_EVERY_N_DETECT` | `3` | Run rolling moire analysis every N detect cycles |
+| `DETECT_V3_STREAM_CLIENT_FRAME_WIDTH` | `960` | Browser frame max width for WebSocket scan |
+| `DETECT_V3_STREAM_CLIENT_JPEG_QUALITY` | `0.82` | Browser JPEG quality target for WebSocket scan |
+| `DETECT_V3_STREAM_MIN_TRACK_SECONDS` | `2.0` | Minimum stream observation time before requiring blink |
+| `DETECT_V3_STREAM_MAX_CHECK_SECONDS` | `6.0` | Max time to wait for blink before spoof result |
 | `ENROLL_V2_BLUR_MIN` | `80.0` | Minimum blur/quality score per angle |
 | `ENROLL_V2_POSE_FRONT_MAX_DISP` | `0.12` | Max nose displacement for front |
 | `ENROLL_V2_POSE_TURN_THRESHOLD` | `0.04` | Min displacement for left/right |
@@ -389,8 +403,9 @@ Manual browser smoke test:
 - Hard refresh the dashboard with `Ctrl + F5`.
 - Start a session.
 - Enroll a student through browser camera.
-- Scan with `/api/scan/v3`.
+- Scan through the web UI using `/ws/scan-v3`.
 - Verify success overlay appears inside the camera frame.
+- Verify default web scan asks for blink/liveness before marking attendance.
 - Test suspicious conditions and verify challenge overlay for left/right/blink.
 - End session and inspect history details.
 
@@ -400,6 +415,6 @@ Manual browser smoke test:
 
 - Challenge state is in-memory and process-local. Multiple FastAPI workers would require Redis or another shared store.
 - Blink challenge uses regular 2D webcam frames. It improves replay resistance but is not equivalent to hardware depth sensing.
-- Passive liveness thresholds require real camera tuning. Poor lighting, compression, or reflective glasses can still trigger challenge.
-- Phone camera and Cloudflare workflows depend on browser/network permissions and fresh frame delivery.
+- Streaming/passive liveness thresholds require real camera tuning. Poor lighting, compression, or reflective glasses can still cause false rejects.
+- Browser WebSocket scan depends on camera permission and network latency. Cloudflare tunnels can reduce effective FPS; the frontend uses backpressure to avoid flooding. Phone camera is not the default Scan V3 path.
 - Some comments in older source files may contain mojibake from prior encoding issues; runtime behavior is unaffected.

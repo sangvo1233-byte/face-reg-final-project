@@ -27,6 +27,9 @@ export const ENROLL_PHASE_META = {
 
 export const state = {
     currentTheme: localStorage.getItem('theme') || 'light',
+    scanModePreference: localStorage.getItem('scanMode') || 'auto',
+    effectiveScanMode: null,
+    scanCapabilities: null,
     isAutoScanning: false,
     autoScanInterval: null,
     scanIntervalMs: 2500,
@@ -35,11 +38,10 @@ export const state = {
     presentStudents: new Map(),
     activeChallenge: null,
     isChallengeRunning: false,
-    challengeFrames: [],
     sessionActive: false,
     sessionStats: { total: 0, present: 0, absent: 0 },
     currentView: 'active',
-    cameraSource: 'webcam',
+    cameraSource: 'browser',
     localStream: null,
     demoPlaying: false,
     enrollState: createEnrollState()
