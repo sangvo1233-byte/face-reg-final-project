@@ -1,7 +1,40 @@
 """
 Face Attendance System — Centralized configuration.
 """
+import os
 from pathlib import Path
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_list(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.getenv(name)
+    if not value:
+        return list(default or [])
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+APP_NAME = os.getenv("APP_NAME", "Face Attendance System")
+APP_VERSION = os.getenv("APP_VERSION", "4.4.0")
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+DEBUG = _env_bool("DEBUG", APP_ENV == "development")
+UVICORN_RELOAD = _env_bool("UVICORN_RELOAD", DEBUG)
+API_DOCS_ENABLED = _env_bool("API_DOCS_ENABLED", DEBUG)
 
 # ── Paths ───────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
@@ -93,5 +126,11 @@ DETECT_V3_STREAM_JPEG_MAX_BYTES = 450_000
 FACE_LANDMARKER_MODEL = MODELS_DIR / "face_landmarker.task"
 
 # ── Server ──────────────────────────────────────────────
-HOST = "0.0.0.0"
-PORT = 8000
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = _env_int("PORT", 8000)
+AUTO_PRELOAD_MODELS = _env_bool("AUTO_PRELOAD_MODELS", True)
+AUTO_LOAD_EMBEDDING_CACHE = _env_bool("AUTO_LOAD_EMBEDDING_CACHE", True)
+AUTO_START_CAMERA = _env_bool("AUTO_START_CAMERA", True)
+CAMERA_REQUIRED = _env_bool("CAMERA_REQUIRED", False)
+CORS_ALLOWED_ORIGINS = _env_list("CORS_ALLOWED_ORIGINS", [])
+TRUSTED_HOSTS = _env_list("TRUSTED_HOSTS", [])

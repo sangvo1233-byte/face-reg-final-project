@@ -849,11 +849,12 @@ async function handleAttendanceEvent(result, sourceMode) {
 function finalizeAttendanceEvent(result) {
     const isMatch = result.status === 'present' || result.status === 'already';
     const alreadySeen = !!(result.student_id && state.presentSet.has(result.student_id));
+    const displayName = result.name || result.student_id || 'Matched Student';
     if (isMatch && result.student_id && !alreadySeen) {
         state.presentSet.add(result.student_id);
         state.presentStudents.set(result.student_id, {
             id: result.student_id,
-            name: result.name || result.student_id,
+            name: displayName,
             className: result.class_name || '',
             status: result.status
         });
@@ -862,14 +863,14 @@ function finalizeAttendanceEvent(result) {
         enqueueAttendanceSuccess(result);
         showResultCard(
             result.student_id,
-            result.name,
+            displayName,
             true,
-            `Matched (Confidence: ${(result.confidence * 100).toFixed(0)}%)`
+            `Matched (Confidence: ${formatPercent(result.confidence)})`
         );
     }
     document.getElementById('autoscan-count').textContent = `${state.scanCount} scanned`;
     document.getElementById('autoscan-status').textContent =
-        isMatch ? `Matched: ${result.name}` : (result.message || 'Scanning...');
+        isMatch ? `Matched: ${displayName}` : (result.message || 'Scanning...');
 }
 
 async function showScanChallengeOverlay(result) {

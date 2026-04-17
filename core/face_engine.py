@@ -53,6 +53,12 @@ class FaceEngine:
         self._cache_loaded = False
         self._load_embeddings_cache()
 
+    def warmup(self, *, load_embeddings: bool = True):
+        """Load the face model and optionally prime the embedding cache."""
+        self._ensure_model()
+        if load_embeddings:
+            self._load_embeddings_cache()
+
     # ── Detection ───────────────────────────────────────────
 
     def detect(self, frame: np.ndarray) -> list[DetectedFace]:
