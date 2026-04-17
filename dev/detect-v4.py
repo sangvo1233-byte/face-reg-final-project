@@ -8,6 +8,7 @@ V4 keeps dev/detect-v3.py intact and adds:
   4. Calibration logging for real-world threshold tuning.
   5. V4.1 screen-context evidence: flat background + glass glare.
   6. V4.2 phone rectangle evidence: device border/shape around face.
+  7. V4.3 enhanced moire pipeline: Y/log/high-pass/Sobel/z-score + track median.
 
 This file is intentionally local/OpenCV only. It does not change the web
 dashboard, API contracts, or database schema.
@@ -67,6 +68,36 @@ MOIRE_EVERY_N_DETECT = 3
 # Bao nhieu lan detect mat thi chay moire mot lan.
 # Giam ve 1: nhay hon, phan ung nhanh hon, nhung ton CPU hon.
 # Tang: nhe may hon nhung de bo lo artifact ngan.
+
+MOIRE_PIPELINE_MODE = "enhanced"
+# Che do tien xu ly FFT.
+# "legacy": grayscale + FFT nhu V4 cu.
+# "enhanced": Y/log/high-pass/Sobel/z-score, nhay hon voi OLED/Retina replay.
+
+MOIRE_SCREEN_THRESHOLD = 0.60
+# Neu moire_score < nguong nay thi xem la nghi man hinh va dua vao challenge.
+# Tang: nhay hon voi video dien thoai.
+# Giam: it challenge nham hon voi nguoi that.
+
+MOIRE_BLOCK_THRESHOLD = 0.45
+# Neu moire_score < nguong nay thi block manh o lop Moire.
+# Tang: block replay manh hon nhung de false positive hon.
+# Giam: bao thu hon, can them context/phone evidence.
+
+MOIRE_SMOOTH_WINDOW = 7
+# So frame dung median smoothing tren moi face track.
+# Tang: on dinh hon nhung phan ung cham hon.
+# Giam: phan ung nhanh hon nhung de jitter.
+
+MOIRE_TRACK_TTL = 12
+# So detect cycle giu track khi mat tam thoi.
+# Tang: history on dinh hon khi bbox rung/mat mat ngan.
+# Giam: it rui ro dung history cu.
+
+MOIRE_IOU_MATCH_THRESHOLD = 0.25
+# IoU toi thieu de gan bbox vao track cu.
+# Tang: tracking chat hon.
+# Giam: de giu track hon khi bbox rung.
 
 MOIRE_HIGH_BAND_WEIGHT = 0.90
 # Do nhay voi vung tan so cao, quan trong voi OLED/Retina.
@@ -149,12 +180,12 @@ PHONE_RECT_ROLLING_STRONG_COUNT = 3
 
 # GOI Y CHINH NHANH:
 # 1. Video OLED van pass:
-#    - Giam MOIRE_FRAME_SUSPICIOUS_EVIDENCE tu 0.38 xuong 0.30.
-#    - Neu van pass, tang MOIRE_ROLLING_SUSPICIOUS_P10_MAX tu 0.38 len 0.48.
+#    - Tang MOIRE_SCREEN_THRESHOLD tu 0.60 len 0.65.
+#    - Neu can block manh hon, tang MOIRE_BLOCK_THRESHOLD tu 0.45 len 0.50.
 #
 # 2. Nguoi that bi challenge qua nhieu:
-#    - Tang MOIRE_FRAME_SUSPICIOUS_EVIDENCE len 0.42-0.48.
-#    - Giam MOIRE_ROLLING_SUSPICIOUS_P10_MAX xuong 0.35.
+#    - Giam MOIRE_SCREEN_THRESHOLD xuong 0.55.
+#    - Giam MOIRE_BLOCK_THRESHOLD xuong 0.38-0.40.
 #
 # 3. Muon bat vien/glare dien thoai ro hon:
 #    - Tang MOIRE_CONTEXT_SCALE tu 1.65 len 2.0 hoac 2.2.
@@ -271,6 +302,21 @@ def safe_roi(frame: np.ndarray, bbox: list[int]) -> np.ndarray:
     return frame[y1:y2, x1:x2]
 
 
+def bbox_iou(a: list[int], b: list[int]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    inter = float(iw * ih)
+    area_a = float(max(0, ax2 - ax1) * max(0, ay2 - ay1))
+    area_b = float(max(0, bx2 - bx1) * max(0, by2 - by1))
+    union = area_a + area_b - inter
+    if union <= 0:
+        return 0.0
+    return inter / union
+
+
 def expanded_roi(frame: np.ndarray, bbox: list[int], scale: float = MOIRE_CONTEXT_SCALE) -> tuple[np.ndarray, list[int]]:
     """Return a context crop around the face for screen/glare cues.
 
@@ -292,6 +338,64 @@ def expanded_roi(frame: np.ndarray, bbox: list[int], scale: float = MOIRE_CONTEX
     if ex2 <= ex1 or ey2 <= ey1:
         return safe_roi(frame, bbox), bbox
     return frame[ey1:ey2, ex1:ex2], [ex1, ey1, ex2, ey2]
+
+
+@dataclass
+class FaceMoireTrack:
+    track_id: int
+    bbox: list[int]
+    ttl: int = MOIRE_TRACK_TTL
+    seen: bool = False
+    scores: deque = field(default_factory=lambda: deque(maxlen=MOIRE_SMOOTH_WINDOW))
+    last_result: dict[str, Any] = field(default_factory=dict)
+
+    def update_score(self, raw_score: float) -> float:
+        if self.scores.maxlen != MOIRE_SMOOTH_WINDOW:
+            self.scores = deque(self.scores, maxlen=MOIRE_SMOOTH_WINDOW)
+        self.scores.append(float(raw_score))
+        return float(np.median(np.asarray(self.scores, dtype=np.float32)))
+
+
+class FaceMoireTrackStore:
+    def __init__(self):
+        self.tracks: dict[int, FaceMoireTrack] = {}
+        self.next_id = 1
+
+    def begin_cycle(self):
+        for track in self.tracks.values():
+            track.seen = False
+
+    def match_and_update(self, bbox: list[int]) -> FaceMoireTrack:
+        best_track = None
+        best_iou = 0.0
+        for track in self.tracks.values():
+            if track.seen:
+                continue
+            iou = bbox_iou(track.bbox, bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_track = track
+
+        if best_track is None or best_iou < MOIRE_IOU_MATCH_THRESHOLD:
+            best_track = FaceMoireTrack(track_id=self.next_id, bbox=bbox[:])
+            self.tracks[best_track.track_id] = best_track
+            self.next_id += 1
+
+        best_track.bbox = bbox[:]
+        best_track.ttl = MOIRE_TRACK_TTL
+        best_track.seen = True
+        return best_track
+
+    def finish_cycle(self) -> set[int]:
+        expired = []
+        for track_id, track in self.tracks.items():
+            if not track.seen:
+                track.ttl -= 1
+            if track.ttl <= 0:
+                expired.append(track_id)
+        for track_id in expired:
+            self.tracks.pop(track_id, None)
+        return set(self.tracks.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -326,14 +430,13 @@ class MoireDetectorV4:
     PERIODIC_STRONG = 5.0
 
     def __init__(self):
-        self.history: list[float] = []
-        self.max_history = 20
         self.last_result: dict[str, Any] = {}
 
         sz = self.ANALYZE_SIZE
         cy, cx = sz // 2, sz // 2
         y, x = np.ogrid[:sz, :sz]
         self._dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2).astype(np.float32)
+        self._angle = np.mod(np.arctan2(y - cy, x - cx), np.pi).astype(np.float32)
         self._window = np.outer(np.hanning(sz), np.hanning(sz)).astype(np.float32)
         self._dc_mask = self._dist > 0
 
@@ -353,22 +456,18 @@ class MoireDetectorV4:
             & (self._dist <= self._band_defs["high"]["r_high"])
         )
 
-    def analyze(self, face_roi: np.ndarray) -> dict[str, Any]:
+    def analyze(self, face_roi: np.ndarray, track: FaceMoireTrack | None = None) -> dict[str, Any]:
         if face_roi is None or face_roi.size == 0:
-            return self._empty_result()
+            return self._empty_result(track)
 
-        gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (self.ANALYZE_SIZE, self.ANALYZE_SIZE))
-        gray_f = gray.astype(np.float32) / 255.0
-        log_mag = self._fft_log_magnitude(gray_f)
+        signal = self._preprocess_for_fft(face_roi)
+        log_mag = self._fft_log_magnitude(signal)
 
         total_energy = float(np.sum(log_mag[self._dc_mask]))
         if total_energy < 1e-6:
             total_energy = 1e-6
 
         band_scores = {}
-        evidence = 0.0
-        strong_signals: list[str] = []
 
         for band, definition in self._band_defs.items():
             metrics = self._band_metrics(
@@ -380,81 +479,129 @@ class MoireDetectorV4:
                 mask=definition["mask"],
             )
             band_scores[band] = metrics
-            band_evidence, band_signals = self._band_evidence(band, metrics)
-            evidence += band_evidence
-            strong_signals.extend(band_signals)
 
-        h_line = self._check_grid_lines(gray, "horizontal")
-        v_line = self._check_grid_lines(gray, "vertical")
+        h_line = self._check_grid_lines(signal, "horizontal")
+        v_line = self._check_grid_lines(signal, "vertical")
         grid_score = float((h_line + v_line) / 2.0)
-        if grid_score >= 0.55:
-            evidence += 0.22
-            strong_signals.append("strong_grid")
-        elif grid_score >= 0.34:
-            evidence += 0.10
-            strong_signals.append("weak_grid")
 
         high_energy = (
             band_scores["mid_high"]["band_energy"]
             + band_scores["high"]["band_energy"]
         )
-        if high_energy > 0.52:
-            evidence += 0.12
-            strong_signals.append("high_frequency_energy")
-        elif high_energy > 0.43:
-            evidence += 0.06
-
-        screen_evidence = clamp(evidence)
-        raw_score = round(1.0 - screen_evidence, 3)
-
-        self.history.append(raw_score)
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
-        avg_score = round(float(np.mean(self.history)), 3)
-
-        strong_count = len([s for s in strong_signals if not s.startswith("weak")])
-        if screen_evidence >= MOIRE_FRAME_BLOCK_EVIDENCE and strong_count >= 2:
-            decision = "block"
-        elif screen_evidence >= MOIRE_FRAME_SUSPICIOUS_EVIDENCE or strong_signals:
-            decision = "suspicious"
-        else:
-            decision = "clean"
 
         wide_values = log_mag[self._wide_mask]
         peak_ratio = float(np.max(wide_values) / max(np.mean(wide_values), 1e-6))
         energy_ratio = float(high_energy)
         periodicity = float(max(m["periodicity"] for m in band_scores.values()))
+        anisotropy = self._check_anisotropy(log_mag)
+
+        f_peak = clamp((peak_ratio - 1.8) / 2.2)
+        f_period = clamp((periodicity - 2.2) / 4.0)
+        f_aniso = clamp((anisotropy - 1.3) / 1.8)
+        f_grid = clamp((grid_score - 0.20) / 0.55)
+
+        screen_evidence = clamp(
+            0.50 * f_peak
+            + 0.34 * f_period
+            + 0.10 * f_aniso
+            + 0.06 * f_grid
+        )
+        raw_score = round(1.0 - screen_evidence, 3)
+
+        smooth_score = float(raw_score)
+        samples = 1
+        track_id = None
+        if track is not None:
+            smooth_score = track.update_score(raw_score)
+            samples = len(track.scores)
+            track_id = track.track_id
+
+        smooth_score = round(float(smooth_score), 3)
+
+        if smooth_score < MOIRE_BLOCK_THRESHOLD:
+            decision = "block"
+        elif smooth_score < MOIRE_SCREEN_THRESHOLD:
+            decision = "suspicious"
+        else:
+            decision = "clean"
+
+        strong_signals: list[str] = []
+        if f_peak >= 0.55:
+            strong_signals.append("peak_prominence")
+        if f_period >= 0.55:
+            strong_signals.append("periodicity")
+        if f_aniso >= 0.55:
+            strong_signals.append("anisotropy")
+        if f_grid >= 0.45:
+            strong_signals.append("grid_projection")
+        if high_energy > 0.52:
+            strong_signals.append("high_frequency_energy")
 
         result = {
-            "moire_score": avg_score,
+            "pipeline_mode": MOIRE_PIPELINE_MODE,
+            "track_id": track_id,
+            "samples": samples,
+            "moire_score": smooth_score,
+            "smooth_score": smooth_score,
             "raw_score": raw_score,
             "is_screen": decision == "block",
             "decision_hint": decision,
             "screen_evidence": round(screen_evidence, 3),
             "strong_signals": strong_signals[:8],
             "band_scores": band_scores,
+            "feature_scores": {
+                "peak": round(f_peak, 3),
+                "periodicity": round(f_period, 3),
+                "anisotropy": round(f_aniso, 3),
+                "grid": round(f_grid, 3),
+            },
             "peak_ratio": round(peak_ratio, 2),
             "energy_ratio": round(energy_ratio, 3),
             "periodicity": round(periodicity, 2),
+            "anisotropy": round(anisotropy, 3),
             "grid_score": round(grid_score, 3),
         }
+        if track is not None:
+            track.last_result = result
         self.last_result = result
         return result
 
-    def _empty_result(self) -> dict[str, Any]:
+    def _empty_result(self, track: FaceMoireTrack | None = None) -> dict[str, Any]:
         return {
+            "pipeline_mode": MOIRE_PIPELINE_MODE,
+            "track_id": track.track_id if track is not None else None,
+            "samples": len(track.scores) if track is not None else 0,
             "moire_score": 0.5,
+            "smooth_score": 0.5,
             "raw_score": 0.5,
             "is_screen": None,
             "decision_hint": "clean",
             "screen_evidence": 0.0,
             "strong_signals": [],
             "band_scores": {},
+            "feature_scores": {},
             "peak_ratio": 0.0,
             "energy_ratio": 0.0,
             "periodicity": 0.0,
+            "anisotropy": 0.0,
             "grid_score": 0.0,
         }
+
+    def _preprocess_for_fft(self, face_roi: np.ndarray) -> np.ndarray:
+        if MOIRE_PIPELINE_MODE == "legacy":
+            gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, (self.ANALYZE_SIZE, self.ANALYZE_SIZE))
+            return gray.astype(np.float32) / 255.0
+
+        y = cv2.cvtColor(face_roi, cv2.COLOR_BGR2YCrCb)[:, :, 0]
+        y = cv2.resize(y, (self.ANALYZE_SIZE, self.ANALYZE_SIZE)).astype(np.float32)
+        y = np.log1p(y)
+        blur = cv2.GaussianBlur(y, (0, 0), sigmaX=3.0, sigmaY=3.0)
+        high = y - blur
+        sx = cv2.Sobel(high, cv2.CV_32F, 1, 0, ksize=3)
+        sy = cv2.Sobel(high, cv2.CV_32F, 0, 1, ksize=3)
+        grad = cv2.magnitude(sx, sy)
+        return ((grad - float(np.mean(grad))) / (float(np.std(grad)) + 1e-6)).astype(np.float32)
 
     def _fft_log_magnitude(self, gray_f: np.ndarray) -> np.ndarray:
         windowed = gray_f * self._window
@@ -543,6 +690,25 @@ class MoireDetectorV4:
         if not peak_counts:
             return 0.0
         return float(np.max(peak_counts))
+
+    def _check_anisotropy(self, log_mag: np.ndarray) -> float:
+        mask = self._wide_mask
+        angles = self._angle[mask]
+        values = log_mag[mask]
+        if values.size < 16:
+            return 1.0
+
+        bins = np.linspace(0.0, np.pi, 25, dtype=np.float32)
+        energies = []
+        for start, end in zip(bins[:-1], bins[1:]):
+            sector = values[(angles >= start) & (angles < end)]
+            if sector.size:
+                energies.append(float(np.sum(sector)))
+        if not energies:
+            return 1.0
+
+        arr = np.asarray(energies, dtype=np.float32)
+        return float(np.max(arr) / max(float(np.mean(arr)), 1e-6))
 
     def _check_grid_lines(self, gray: np.ndarray, direction: str) -> float:
         if direction == "horizontal":
@@ -1131,7 +1297,7 @@ class RollingMoireDecision:
                 "clean_count": 0,
             }
 
-        scores = np.asarray([float(s.get("raw_score", 0.5)) for s in self.samples], dtype=np.float32)
+        scores = np.asarray([float(s.get("moire_score", s.get("raw_score", 0.5))) for s in self.samples], dtype=np.float32)
         hints = [s.get("decision_hint", "clean") for s in self.samples]
         suspicious_count = sum(1 for h in hints if h in {"suspicious", "block"})
         block_count = sum(1 for h in hints if h == "block")
@@ -1143,13 +1309,9 @@ class RollingMoireDecision:
         p10_score = float(np.percentile(scores, 10))
 
         decision = "checking"
-        if samples >= 4 and (block_count >= 4 or (p10_score < 0.22 and suspicious_count >= 4)):
+        if block_count >= 1 or min_score < MOIRE_BLOCK_THRESHOLD:
             decision = "block"
-        elif samples >= 3 and (
-            suspicious_count >= 3
-            or min_score < 0.30
-            or p10_score < MOIRE_ROLLING_SUSPICIOUS_P10_MAX
-        ):
+        elif suspicious_count >= 1 or mean_score < MOIRE_SCREEN_THRESHOLD or p10_score < MOIRE_SCREEN_THRESHOLD:
             decision = "suspicious"
         elif samples >= 4 and clean_count >= 3 and mean_score > MOIRE_ROLLING_CLEAN_MEAN_MIN:
             decision = "clean"
@@ -1511,13 +1673,13 @@ def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL
     h, w = frame.shape[:2]
     panel = np.full((h, panel_w, 3), C_PANEL_BG, dtype=np.uint8)
 
-    cv2.putText(panel, "FACE RECOGNITION V4.2", (S(14), S(28)), FONT, FS(0.55), C_GOLD, 1, cv2.LINE_AA)
+    cv2.putText(panel, "FACE RECOGNITION V4.3", (S(14), S(28)), FONT, FS(0.55), C_GOLD, 1, cv2.LINE_AA)
     cv2.putText(panel, f"Thr: {V4_COSINE_THRESHOLD:.0%}", (panel_w - S(90), S(28)), FONT_SMALL, FS(0.45), C_DIM, 1, cv2.LINE_AA)
     cv2.line(panel, (S(14), S(38)), (panel_w - S(14), S(38)), C_DIM, 1, cv2.LINE_AA)
 
     y = S(58)
     if challenge.active or challenge.message:
-        cv2.putText(panel, "ANTI-SPOOF V4.2", (S(14), y), FONT, FS(0.45), C_ORANGE, 1, cv2.LINE_AA)
+        cv2.putText(panel, "ANTI-SPOOF V4.3", (S(14), y), FONT, FS(0.45), C_ORANGE, 1, cv2.LINE_AA)
         y += S(22)
         status_txt = challenge.message or challenge.text
         s_color = C_ORANGE if challenge.active else (C_PRESENT if "passed" in status_txt.lower() else C_SPOOF)
@@ -1584,9 +1746,11 @@ def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL
             cv2.rectangle(panel, (bar_x2, y - S(10)), (bar_x2 + bar_w2, y), C_BLACK, -1)
             cv2.rectangle(panel, (bar_x2, y - S(10)), (bar_x2 + filled2, y), m_color, -1)
             y += S(18)
-            cv2.putText(panel, f"  {decision.upper()} raw:{moire.get('raw_score', 0):.2f} p10:{rolling.get('p10_score', 0):.2f}", (S(14), y), FONT_SMALL, FS(0.42), m_color, 1, cv2.LINE_AA)
+            cv2.putText(panel, f"  {decision.upper()} raw:{moire.get('raw_score', 0):.2f} med:{moire.get('smooth_score', 0):.2f}", (S(14), y), FONT_SMALL, FS(0.42), m_color, 1, cv2.LINE_AA)
             y += S(18)
-            cv2.putText(panel, f"  Pk:{moire.get('peak_ratio', 0):.1f} Pd:{moire.get('periodicity', 0):.1f} Gr:{moire.get('grid_score', 0):.2f}", (S(14), y), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
+            cv2.putText(panel, f"  Track:{moire.get('track_id', '-')} N:{moire.get('samples', 0)} Mode:{moire.get('pipeline_mode', '')[:3]}", (S(14), y), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
+            y += S(18)
+            cv2.putText(panel, f"  Pk:{moire.get('peak_ratio', 0):.1f} Pd:{moire.get('periodicity', 0):.1f} An:{moire.get('anisotropy', 0):.2f} Gr:{moire.get('grid_score', 0):.2f}", (S(14), y), FONT_SMALL, FS(0.38), C_DIM, 1, cv2.LINE_AA)
             y += S(18)
 
         screen_context = r.get("screen_context", {})
@@ -1757,6 +1921,7 @@ def process_face(
     anti_spoof: Any,
     liveness: StreamingLivenessTracker,
     moire_detector: MoireDetectorV4,
+    moire_tracks: FaceMoireTrackStore,
     context_detector: ScreenContextDetectorV41,
     phone_rect_detector: PhoneRectangleDetectorV42,
     rolling_by_face: dict[int, RollingMoireDecision],
@@ -1770,22 +1935,24 @@ def process_face(
     bbox = bbox_list(face.bbox)
     x1, y1, x2, y2 = bbox
     roi, moire_roi_bbox = expanded_roi(frame, bbox)
+    moire_track = moire_tracks.match_and_update(bbox)
+    track_id = moire_track.track_id
 
-    if run_moire or face_index not in last_moire:
-        moire = moire_detector.analyze(roi)
-        rolling = rolling_by_face[face_index].update(moire)
-        last_moire[face_index] = moire
-        last_rolling[face_index] = rolling
+    if run_moire or not moire_track.last_result:
+        moire = moire_detector.analyze(roi, moire_track)
+        rolling = rolling_by_face[track_id].update(moire)
+        last_moire[track_id] = moire
+        last_rolling[track_id] = rolling
     else:
-        moire = last_moire.get(face_index, moire_detector.last_result or {})
-        rolling = last_rolling.get(face_index, rolling_by_face[face_index].summary())
+        moire = moire_track.last_result or last_moire.get(track_id, moire_detector.last_result or {})
+        rolling = last_rolling.get(track_id, rolling_by_face[track_id].summary())
 
     live = liveness.get_liveness(bbox)
     passive = anti_spoof.check(frame, face.bbox)
     passive_status = passive_decision(float(passive.score))
     screen_context = context_detector.analyze(frame, bbox, moire_roi_bbox)
     phone_rect = phone_rect_detector.analyze(frame, bbox)
-    phone_rect_rolling = phone_rolling_by_face[face_index].update(phone_rect)
+    phone_rect_rolling = phone_rolling_by_face[track_id].update(phone_rect)
     metrics = engine.get_face_metrics(frame, face)
     match = engine.match_with_threshold(face.embedding, V4_COSINE_THRESHOLD)
 
@@ -1797,11 +1964,12 @@ def process_face(
     student = {}
     emb_count = 0
 
-    if rolling.get("decision") == "block":
+    moire_decision = moire.get("decision_hint", rolling.get("decision", "clean"))
+    if rolling.get("decision") == "block" or moire_decision == "block":
         status = "spoof"
         name = "SPOOF"
-        label = f"SCREEN detected ({moire.get('raw_score', 0):.0%})"
-        extra = "Rolling moire block"
+        label = f"SCREEN detected ({moire.get('moire_score', 0):.0%})"
+        extra = f"Moire track:{moire.get('track_id')} raw:{moire.get('raw_score', 0):.2f}"
         color = C_SPOOF
     elif live.get("state") == "spoof":
         status = "spoof"
@@ -1827,7 +1995,7 @@ def process_face(
     elif (
         phone_rect.get("decision") == "strong"
         and (
-            rolling.get("decision") == "suspicious"
+            moire_decision == "suspicious"
             or screen_context.get("decision") in {"suspicious", "strong"}
             or passive_status == "suspicious"
         )
@@ -1860,7 +2028,7 @@ def process_face(
         emb_count = db.get_embedding_count(match.student_id)
         candidate = build_candidate(match, student, emb_count)
         suspicious_reasons = []
-        if rolling.get("decision") == "suspicious":
+        if moire_decision == "suspicious":
             suspicious_reasons.append("moire suspicious")
         if screen_context.get("decision") in {"suspicious", "strong"}:
             suspicious_reasons.append(f"context {screen_context.get('decision')}")
@@ -1911,7 +2079,7 @@ def process_face(
         if status == "present":
             name = match.name
             label = f"ID:{match.student_id} Conf:{match.score:.0%}"
-            extra = f"Emb:{emb_count} Moire:{rolling.get('decision')} Ctx:{screen_context.get('decision')} Phone:{phone_rect.get('decision')} Live:OK"
+            extra = f"Emb:{emb_count} Moire:{moire_decision} Ctx:{screen_context.get('decision')} Phone:{phone_rect.get('decision')} Live:OK"
             color = C_PRESENT
         elif status == "challenge":
             name = "VERIFY"
@@ -1984,7 +2152,7 @@ def process_face(
 def main():
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     print("=" * 72)
-    print("  Detect V4.2 Research - Moire + context + phone rectangle + challenge")
+    print("  Detect V4.3 Research - Enhanced moire + context + phone rectangle")
     print("=" * 72)
     print("This script is local/OpenCV only and does not change production web.")
 
@@ -1997,6 +2165,7 @@ def main():
     anti_spoof = get_anti_spoof()
     liveness = StreamingLivenessTracker()
     moire_detector = MoireDetectorV4()
+    moire_tracks = FaceMoireTrackStore()
     context_detector = ScreenContextDetectorV41()
     phone_rect_detector = PhoneRectangleDetectorV42()
     challenge = ChallengeControllerV4()
@@ -2020,7 +2189,7 @@ def main():
         print(f"ERROR: Cannot open camera index {CAM_INDEX}")
         return
 
-    win_name = "Live Face Detection V4.2"
+    win_name = "Live Face Detection V4.3"
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
     total_w = FRAME_W + INFO_PANEL_W
     total_h = FRAME_H
@@ -2075,6 +2244,7 @@ def main():
                     if run_moire:
                         perf_moire_ms = (time.time() - t_moire) * 1000.0
                     last_results = []
+                    moire_tracks.begin_cycle()
                     if not faces:
                         # Clear stale per-index rolling when no face remains visible.
                         if detect_cycle % (MOIRE_EVERY_N_DETECT * 8) == 0:
@@ -2095,6 +2265,7 @@ def main():
                             anti_spoof=anti_spoof,
                             liveness=liveness,
                             moire_detector=moire_detector,
+                            moire_tracks=moire_tracks,
                             context_detector=context_detector,
                             phone_rect_detector=phone_rect_detector,
                             rolling_by_face=rolling_by_face,
@@ -2106,6 +2277,13 @@ def main():
                             logger=cal_logger,
                         )
                         last_results.append(entry)
+                    active_track_ids = moire_tracks.finish_cycle()
+                    for track_id in list(rolling_by_face.keys()):
+                        if track_id not in active_track_ids:
+                            rolling_by_face.pop(track_id, None)
+                            phone_rolling_by_face.pop(track_id, None)
+                            last_moire.pop(track_id, None)
+                            last_rolling.pop(track_id, None)
                 except Exception as exc:
                     print(f"Detect error: {exc}")
                     import traceback
@@ -2153,7 +2331,7 @@ def main():
                 cal_logger.enabled,
                 debug_enabled,
             )
-            perf_text = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  FFT:128  Ctx:ON  PhoneRect:ON  Skip:{MOIRE_EVERY_N_DETECT - 1}/{MOIRE_EVERY_N_DETECT}  View:{policy_views[policy_view_index]}"
+            perf_text = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  FFT:{MOIRE_PIPELINE_MODE}  Screen<{MOIRE_SCREEN_THRESHOLD:.2f} Block<{MOIRE_BLOCK_THRESHOLD:.2f}  PhoneRect:ON  Skip:{MOIRE_EVERY_N_DETECT - 1}/{MOIRE_EVERY_N_DETECT}"
             cv2.putText(frame, perf_text, (S(14), S(78)), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
 
             display_frame = (
