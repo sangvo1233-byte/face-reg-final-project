@@ -7,6 +7,7 @@ V4 keeps dev/detect-v3.py intact and adds:
   3. Challenge-first policy for suspicious frames.
   4. Calibration logging for real-world threshold tuning.
   5. V4.1 screen-context evidence: flat background + glass glare.
+  6. V4.2 phone rectangle evidence: device border/shape around face.
 
 This file is intentionally local/OpenCV only. It does not change the web
 dashboard, API contracts, or database schema.
@@ -121,6 +122,31 @@ SCREEN_CONTEXT_STRONG_THRESHOLD = 0.78
 # Nguong context rat nghi man hinh.
 # Chi block khi co them moire/passive suspicious; dung mot minh chi challenge.
 
+PHONE_RECT_ENABLED = True
+# Bat/tat lop tim khung dien thoai/man hinh quanh mat.
+# True: cong diem nghi ngo khi thay mat nam trong khung chu nhat.
+# False: quay lai V4.1, khong dung geometry cua thiet bi.
+
+PHONE_RECT_CONTEXT_SCALE = 2.45
+# Do no ROI de tim vien/mep/goc dien thoai quanh mat.
+# Tang: de thay vien dien thoai hon.
+# Giam: it dinh nham khung cua/poster/nen hon.
+
+PHONE_RECT_SUSPICIOUS_THRESHOLD = 0.45
+# Diem bat dau xem khung chu nhat la nghi ngo.
+# Giam: nhay hon voi dien thoai OLED.
+# Tang: it false positive hon voi background co khung.
+
+PHONE_RECT_STRONG_THRESHOLD = 0.68
+# Diem khung chu nhat rat giong dien thoai/man hinh.
+# Giam: challenge/block manh hon.
+# Tang: bao thu hon, can tin hieu ro hon.
+
+PHONE_RECT_ROLLING_STRONG_COUNT = 3
+# Can bao nhieu frame gan day thay phone-rect STRONG de nang thanh BLOCK candidate.
+# Giam: bat nhanh hon.
+# Tang: on dinh hon, it block nham hon.
+
 # GOI Y CHINH NHANH:
 # 1. Video OLED van pass:
 #    - Giam MOIRE_FRAME_SUSPICIOUS_EVIDENCE tu 0.38 xuong 0.30.
@@ -133,10 +159,18 @@ SCREEN_CONTEXT_STRONG_THRESHOLD = 0.78
 # 3. Muon bat vien/glare dien thoai ro hon:
 #    - Tang MOIRE_CONTEXT_SCALE tu 1.65 len 2.0 hoac 2.2.
 #
-# 4. Khi test replay lien tuc:
+# 4. Muon bat vien den/khung dien thoai ro hon:
+#    - Tang PHONE_RECT_CONTEXT_SCALE tu 2.45 len 2.8.
+#    - Giam PHONE_RECT_SUSPICIOUS_THRESHOLD tu 0.45 xuong 0.38.
+#
+# 5. Nguoi that bi bat nham do cua/poster/khung nen:
+#    - Tang PHONE_RECT_SUSPICIOUS_THRESHOLD len 0.52.
+#    - Tang PHONE_RECT_ROLLING_STRONG_COUNT len 4.
+#
+# 6. Khi test replay lien tuc:
 #    - Giam CHALLENGE_COOLDOWN xuong 0 hoac 2 de moi lan deu danh gia lai.
 #
-# 5. Moi lan chi chinh 1-2 tham so roi test lai.
+# 7. Moi lan chi chinh 1-2 tham so roi test lai.
 
 # ---------------------------------------------------------------------------
 # Runtime config noi bo - it khi can chinh
@@ -763,6 +797,316 @@ class ScreenContextDetectorV41:
         return float(-np.sum(p * np.log2(p)))
 
 
+class PhoneRectangleDetectorV42:
+    """Detect phone/screen rectangle evidence around a detected face.
+
+    This is a geometry/device evidence layer. It should normally trigger
+    challenge or combine with other suspicious signals, not classify spoof
+    alone from a single frame.
+    """
+
+    def analyze(self, frame: np.ndarray, face_bbox: list[int]) -> dict[str, Any]:
+        if not PHONE_RECT_ENABLED:
+            return self._empty("disabled")
+
+        roi, roi_bbox = expanded_roi(frame, face_bbox, PHONE_RECT_CONTEXT_SCALE)
+        if roi is None or roi.size == 0:
+            return self._empty("empty_roi", roi_bbox)
+
+        local_face = self._local_bbox(face_bbox, roi_bbox)
+        edges = self._edges(roi)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        best = None
+        candidate_count = 0
+        for contour in contours:
+            candidate = self._score_candidate(roi, edges, contour, local_face, roi_bbox)
+            if not candidate:
+                continue
+            candidate_count += 1
+            if best is None or candidate["score"] > best["score"]:
+                best = candidate
+
+        if best is None:
+            result = self._empty("no_rectangle", roi_bbox)
+            result["candidate_count"] = 0
+            return result
+
+        best["candidate_count"] = candidate_count
+        score = float(best["score"])
+        signals = []
+        if best["face_inside_score"] >= 0.70:
+            signals.append("face_inside_rect")
+        if best["black_border_score"] >= 0.45:
+            signals.append("dark_border")
+        if best["border_edge_score"] >= 0.45:
+            signals.append("sharp_rect_edge")
+        if best["corner_score"] >= 0.70:
+            signals.append("rect_corners")
+
+        if score >= PHONE_RECT_STRONG_THRESHOLD:
+            decision = "strong"
+        elif score >= PHONE_RECT_SUSPICIOUS_THRESHOLD:
+            decision = "suspicious"
+        else:
+            decision = "clean"
+
+        return {
+            "score": round(score, 3),
+            "decision": decision,
+            "signals": signals,
+            "candidate_count": int(best["candidate_count"]),
+            "roi_bbox": roi_bbox,
+            "best_rect": best["best_rect"],
+            "best_rect_points": best["best_rect_points"],
+            "rectangularity": round(best["rectangularity_score"], 3),
+            "aspect_ratio": round(best["aspect_ratio"], 3),
+            "aspect_score": round(best["aspect_score"], 3),
+            "face_inside_score": round(best["face_inside_score"], 3),
+            "rect_area_ratio": round(best["rect_area_ratio"], 3),
+            "rect_area_score": round(best["rect_area_score"], 3),
+            "border_edge_score": round(best["border_edge_score"], 3),
+            "black_border_score": round(best["black_border_score"], 3),
+            "corner_score": round(best["corner_score"], 3),
+            "margin_score": round(best["margin_score"], 3),
+        }
+
+    def _empty(self, reason: str, roi_bbox: list[int] | None = None) -> dict[str, Any]:
+        return {
+            "score": 0.0,
+            "decision": "clean",
+            "signals": [reason] if reason != "disabled" else [],
+            "candidate_count": 0,
+            "roi_bbox": roi_bbox or [],
+            "best_rect": [],
+            "best_rect_points": [],
+            "rectangularity": 0.0,
+            "aspect_ratio": 0.0,
+            "aspect_score": 0.0,
+            "face_inside_score": 0.0,
+            "rect_area_ratio": 0.0,
+            "rect_area_score": 0.0,
+            "border_edge_score": 0.0,
+            "black_border_score": 0.0,
+            "corner_score": 0.0,
+            "margin_score": 0.0,
+        }
+
+    def _edges(self, roi: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(gray, 45, 135)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        return cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    def _score_candidate(
+        self,
+        roi: np.ndarray,
+        edges: np.ndarray,
+        contour: np.ndarray,
+        local_face: list[int],
+        roi_bbox: list[int],
+    ) -> dict[str, Any] | None:
+        roi_h, roi_w = roi.shape[:2]
+        roi_area = max(1.0, float(roi_h * roi_w))
+        contour_area = float(cv2.contourArea(contour))
+        if contour_area < roi_area * 0.025:
+            return None
+
+        rect = cv2.minAreaRect(contour)
+        (cx, cy), (rw, rh), _ = rect
+        rw, rh = float(rw), float(rh)
+        if rw < 12 or rh < 12:
+            return None
+
+        rect_area = max(1.0, rw * rh)
+        rect_area_ratio = rect_area / roi_area
+        if rect_area_ratio < 0.08 or rect_area_ratio > 0.98:
+            return None
+
+        box = cv2.boxPoints(rect).astype(np.int32)
+        box_float = box.astype(np.float32)
+        x, y, w, h = cv2.boundingRect(box)
+        if w < 12 or h < 12:
+            return None
+
+        rectangularity = clamp(contour_area / rect_area)
+        rectangularity_score = clamp((rectangularity - 0.45) / 0.35)
+
+        long_side = max(rw, rh)
+        short_side = max(1.0, min(rw, rh))
+        aspect_ratio = long_side / short_side
+        aspect_score = clamp(1.0 - abs(aspect_ratio - 1.75) / 1.05)
+
+        face_inside_score = self._face_inside_score(box_float, local_face)
+        if face_inside_score < 0.35:
+            return None
+
+        rect_area_score = clamp(1.0 - abs(rect_area_ratio - 0.42) / 0.38)
+        border_edge_score, black_border_score = self._border_scores(roi, edges, box)
+        corner_score = self._corner_score(contour)
+        margin_score = self._margin_score([x, y, x + w, y + h], local_face)
+
+        score = clamp(
+            rectangularity_score * 0.22
+            + face_inside_score * 0.20
+            + aspect_score * 0.12
+            + rect_area_score * 0.10
+            + border_edge_score * 0.14
+            + black_border_score * 0.16
+            + corner_score * 0.08
+            + margin_score * 0.08
+        )
+
+        rx1, ry1, _, _ = roi_bbox
+        abs_box = [[int(px + rx1), int(py + ry1)] for px, py in box.tolist()]
+        abs_rect = [int(x + rx1), int(y + ry1), int(x + w + rx1), int(y + h + ry1)]
+
+        return {
+            "score": score,
+            "candidate_count": 1,
+            "best_rect": abs_rect,
+            "best_rect_points": abs_box,
+            "rectangularity_score": rectangularity_score,
+            "aspect_ratio": aspect_ratio,
+            "aspect_score": aspect_score,
+            "face_inside_score": face_inside_score,
+            "rect_area_ratio": rect_area_ratio,
+            "rect_area_score": rect_area_score,
+            "border_edge_score": border_edge_score,
+            "black_border_score": black_border_score,
+            "corner_score": corner_score,
+            "margin_score": margin_score,
+        }
+
+    def _border_scores(self, roi: np.ndarray, edges: np.ndarray, box: np.ndarray) -> tuple[float, float]:
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        fill_mask = np.zeros(gray.shape, dtype=np.uint8)
+        border_mask = np.zeros(gray.shape, dtype=np.uint8)
+        min_side = max(1, int(min(cv2.boundingRect(box)[2], cv2.boundingRect(box)[3])))
+        thickness = max(3, int(min_side * 0.035))
+        cv2.drawContours(fill_mask, [box], -1, 255, -1)
+        cv2.drawContours(border_mask, [box], -1, 255, thickness)
+
+        border_pixels = int(np.sum(border_mask > 0))
+        if border_pixels <= 0:
+            return 0.0, 0.0
+
+        border_edge_density = float(np.mean(edges[border_mask > 0] > 0))
+        border_edge_score = clamp((border_edge_density - 0.06) / 0.24)
+
+        border_values = gray[border_mask > 0]
+        dark_ratio = float(np.mean(border_values < 55)) if border_values.size else 0.0
+
+        erode_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (thickness * 2 + 1, thickness * 2 + 1))
+        inner_mask = cv2.erode(fill_mask, erode_kernel, iterations=1)
+        inner_values = gray[inner_mask > 0]
+        border_mean = float(np.mean(border_values)) if border_values.size else 0.0
+        inner_mean = float(np.mean(inner_values)) if inner_values.size else border_mean
+        dark_contrast = clamp((inner_mean - border_mean) / 80.0)
+        black_border_score = clamp(clamp((dark_ratio - 0.10) / 0.40) * 0.65 + dark_contrast * 0.35)
+
+        return border_edge_score, black_border_score
+
+    def _corner_score(self, contour: np.ndarray) -> float:
+        peri = float(cv2.arcLength(contour, True))
+        if peri <= 0:
+            return 0.0
+        approx = cv2.approxPolyDP(contour, 0.035 * peri, True)
+        n = len(approx)
+        if n <= 0:
+            return 0.0
+        return clamp(1.0 - abs(n - 4) / 5.0)
+
+    def _face_inside_score(self, box: np.ndarray, local_face: list[int]) -> float:
+        fx1, fy1, fx2, fy2 = local_face
+        points = [
+            ((fx1 + fx2) / 2.0, (fy1 + fy2) / 2.0),
+            (fx1, fy1),
+            (fx2, fy1),
+            (fx2, fy2),
+            (fx1, fy2),
+        ]
+        inside = 0
+        for point in points:
+            if cv2.pointPolygonTest(box, point, False) >= 0:
+                inside += 1
+        return inside / len(points)
+
+    def _margin_score(self, rect_bbox: list[int], local_face: list[int]) -> float:
+        rx1, ry1, rx2, ry2 = rect_bbox
+        fx1, fy1, fx2, fy2 = local_face
+        rw = max(1, rx2 - rx1)
+        rh = max(1, ry2 - ry1)
+        margins = [fx1 - rx1, fy1 - ry1, rx2 - fx2, ry2 - fy2]
+        if min(margins) < 0:
+            return 0.0
+        min_margin = min(margins)
+        balance = min(margins[0], margins[2]) / max(1, max(margins[0], margins[2]))
+        balance = min(balance, min(margins[1], margins[3]) / max(1, max(margins[1], margins[3])))
+        margin_room = clamp(min_margin / (0.07 * min(rw, rh)))
+        return clamp(margin_room * 0.65 + balance * 0.35)
+
+    def _local_bbox(self, face_bbox: list[int], roi_bbox: list[int]) -> list[int]:
+        fx1, fy1, fx2, fy2 = face_bbox
+        rx1, ry1, _, _ = roi_bbox
+        return [fx1 - rx1, fy1 - ry1, fx2 - rx1, fy2 - ry1]
+
+
+@dataclass
+class RollingPhoneRectDecision:
+    maxlen: int = 8
+    samples: deque = field(default_factory=lambda: deque(maxlen=8))
+
+    def update(self, result: dict[str, Any]) -> dict[str, Any]:
+        if self.samples.maxlen != self.maxlen:
+            self.samples = deque(self.samples, maxlen=self.maxlen)
+        self.samples.append(result)
+        return self.summary()
+
+    def summary(self) -> dict[str, Any]:
+        if not self.samples:
+            return {
+                "decision": "checking",
+                "samples": 0,
+                "mean_score": 0.0,
+                "max_score": 0.0,
+                "suspicious_count": 0,
+                "strong_count": 0,
+                "clean_count": 0,
+            }
+
+        scores = np.asarray([float(s.get("score", 0.0)) for s in self.samples], dtype=np.float32)
+        hints = [s.get("decision", "clean") for s in self.samples]
+        suspicious_count = sum(1 for h in hints if h in {"suspicious", "strong"})
+        strong_count = sum(1 for h in hints if h == "strong")
+        clean_count = sum(1 for h in hints if h == "clean")
+        samples = len(self.samples)
+        mean_score = float(np.mean(scores))
+        max_score = float(np.max(scores))
+
+        if samples >= PHONE_RECT_ROLLING_STRONG_COUNT and strong_count >= PHONE_RECT_ROLLING_STRONG_COUNT:
+            decision = "block"
+        elif samples >= 2 and (strong_count >= 1 or suspicious_count >= 2 or mean_score >= PHONE_RECT_SUSPICIOUS_THRESHOLD):
+            decision = "suspicious"
+        elif samples >= 3 and clean_count >= 2:
+            decision = "clean"
+        else:
+            decision = "checking"
+
+        return {
+            "decision": decision,
+            "samples": samples,
+            "mean_score": round(mean_score, 3),
+            "max_score": round(max_score, 3),
+            "suspicious_count": suspicious_count,
+            "strong_count": strong_count,
+            "clean_count": clean_count,
+        }
+
+
 @dataclass
 class RollingMoireDecision:
     maxlen: int = 18
@@ -969,6 +1313,8 @@ class CalibrationLogger:
             "moire": payload.get("moire", {}),
             "rolling": payload.get("rolling", {}),
             "screen_context": payload.get("screen_context", {}),
+            "phone_rect": payload.get("phone_rect", {}),
+            "phone_rect_rolling": payload.get("phone_rect_rolling", {}),
             "liveness": payload.get("liveness", {}),
             "passive": payload.get("passive", {}),
             "challenge": payload.get("challenge", {}),
@@ -1081,6 +1427,22 @@ def draw_moire_spectrum(img, face_roi, x1, y1):
         return
 
 
+def draw_phone_rectangle_overlay(img, phone_rect, phone_rect_rolling):
+    if not phone_rect or not phone_rect.get("best_rect_points"):
+        return
+    decision = phone_rect_rolling.get("decision", phone_rect.get("decision", "clean"))
+    if decision == "clean" and phone_rect.get("score", 0) < PHONE_RECT_SUSPICIOUS_THRESHOLD:
+        return
+
+    color = C_SPOOF if decision == "block" else (C_ORANGE if decision in {"suspicious", "strong"} else C_GOLD)
+    points = np.asarray(phone_rect["best_rect_points"], dtype=np.int32)
+    cv2.polylines(img, [points], True, color, S(2), cv2.LINE_AA)
+    x, y, _, _ = phone_rect.get("best_rect", [0, 0, 0, 0])
+    label = f"PHONE {phone_rect.get('score', 0):.0%}"
+    cv2.rectangle(img, (x, max(0, y - S(20))), (x + S(104), y), color, -1)
+    cv2.putText(img, label, (x + S(4), max(S(14), y - S(5))), FONT, FS(0.35), C_WHITE, 1, cv2.LINE_AA)
+
+
 def draw_challenge_overlay(img, challenge: ChallengeControllerV4):
     """V3-style top challenge banner, backed by V4 challenge state."""
     if not challenge.active and not challenge.message:
@@ -1149,13 +1511,13 @@ def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL
     h, w = frame.shape[:2]
     panel = np.full((h, panel_w, 3), C_PANEL_BG, dtype=np.uint8)
 
-    cv2.putText(panel, "FACE RECOGNITION V4.1", (S(14), S(28)), FONT, FS(0.55), C_GOLD, 1, cv2.LINE_AA)
+    cv2.putText(panel, "FACE RECOGNITION V4.2", (S(14), S(28)), FONT, FS(0.55), C_GOLD, 1, cv2.LINE_AA)
     cv2.putText(panel, f"Thr: {V4_COSINE_THRESHOLD:.0%}", (panel_w - S(90), S(28)), FONT_SMALL, FS(0.45), C_DIM, 1, cv2.LINE_AA)
     cv2.line(panel, (S(14), S(38)), (panel_w - S(14), S(38)), C_DIM, 1, cv2.LINE_AA)
 
     y = S(58)
     if challenge.active or challenge.message:
-        cv2.putText(panel, "ANTI-SPOOF V4", (S(14), y), FONT, FS(0.45), C_ORANGE, 1, cv2.LINE_AA)
+        cv2.putText(panel, "ANTI-SPOOF V4.2", (S(14), y), FONT, FS(0.45), C_ORANGE, 1, cv2.LINE_AA)
         y += S(22)
         status_txt = challenge.message or challenge.text
         s_color = C_ORANGE if challenge.active else (C_PRESENT if "passed" in status_txt.lower() else C_SPOOF)
@@ -1256,6 +1618,45 @@ def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL
             )
             y += S(18)
 
+        phone_rect = r.get("phone_rect", {})
+        phone_rect_rolling = r.get("phone_rect_rolling", {})
+        if phone_rect:
+            phone_decision = phone_rect_rolling.get("decision", phone_rect.get("decision", "clean"))
+            phone_color = C_SPOOF if phone_decision == "block" else (C_ORANGE if phone_decision in {"suspicious", "strong"} else C_PRESENT)
+            cv2.putText(
+                panel,
+                f"Phone Rect V4.2: {phone_decision.upper()} {phone_rect.get('score', 0):.2f}",
+                (S(14), y),
+                FONT_SMALL,
+                FS(0.45),
+                phone_color,
+                1,
+                cv2.LINE_AA,
+            )
+            y += S(18)
+            cv2.putText(
+                panel,
+                f"  In:{phone_rect.get('face_inside_score', 0):.2f} Edge:{phone_rect.get('border_edge_score', 0):.2f} Dark:{phone_rect.get('black_border_score', 0):.2f}",
+                (S(14), y),
+                FONT_SMALL,
+                FS(0.38),
+                C_DIM,
+                1,
+                cv2.LINE_AA,
+            )
+            y += S(18)
+            cv2.putText(
+                panel,
+                f"  Rect:{phone_rect.get('rectangularity', 0):.2f} Asp:{phone_rect.get('aspect_ratio', 0):.2f} Strong:{phone_rect_rolling.get('strong_count', 0)}",
+                (S(14), y),
+                FONT_SMALL,
+                FS(0.38),
+                C_DIM,
+                1,
+                cv2.LINE_AA,
+            )
+            y += S(18)
+
         quality = r.get("quality")
         if quality:
             cv2.putText(panel, f"Blur: {quality['blur']:.0f}  Bright: {quality['bright']:.0f}", (S(14), y), FONT_SMALL, FS(0.42), C_DIM, 1, cv2.LINE_AA)
@@ -1312,6 +1713,10 @@ def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL
             if ctx_signals:
                 cv2.putText(panel, ctx_signals[:42], (S(14), y), FONT_SMALL, FS(0.32), C_ORANGE, 1, cv2.LINE_AA)
                 y += S(18)
+            phone_signals = ", ".join(phone_rect.get("signals", [])[:3])
+            if phone_signals:
+                cv2.putText(panel, phone_signals[:42], (S(14), y), FONT_SMALL, FS(0.32), C_ORANGE, 1, cv2.LINE_AA)
+                y += S(18)
 
         cv2.line(panel, (S(14), y), (panel_w - S(14), y), (60, 60, 65), 1)
         y += S(14)
@@ -1353,7 +1758,9 @@ def process_face(
     liveness: StreamingLivenessTracker,
     moire_detector: MoireDetectorV4,
     context_detector: ScreenContextDetectorV41,
+    phone_rect_detector: PhoneRectangleDetectorV42,
     rolling_by_face: dict[int, RollingMoireDecision],
+    phone_rolling_by_face: dict[int, RollingPhoneRectDecision],
     last_moire: dict[int, dict[str, Any]],
     last_rolling: dict[int, dict[str, Any]],
     run_moire: bool,
@@ -1377,6 +1784,8 @@ def process_face(
     passive = anti_spoof.check(frame, face.bbox)
     passive_status = passive_decision(float(passive.score))
     screen_context = context_detector.analyze(frame, bbox, moire_roi_bbox)
+    phone_rect = phone_rect_detector.analyze(frame, bbox)
+    phone_rect_rolling = phone_rolling_by_face[face_index].update(phone_rect)
     metrics = engine.get_face_metrics(frame, face)
     match = engine.match_with_threshold(face.embedding, V4_COSINE_THRESHOLD)
 
@@ -1409,6 +1818,25 @@ def process_face(
         label = "Screen context strong"
         extra = ", ".join(screen_context.get("signals", [])[:3])
         color = C_SPOOF
+    elif phone_rect_rolling.get("decision") == "block":
+        status = "spoof"
+        name = "SPOOF"
+        label = "Phone rectangle detected"
+        extra = f"Strong:{phone_rect_rolling.get('strong_count', 0)} Score:{phone_rect.get('score', 0):.2f}"
+        color = C_SPOOF
+    elif (
+        phone_rect.get("decision") == "strong"
+        and (
+            rolling.get("decision") == "suspicious"
+            or screen_context.get("decision") in {"suspicious", "strong"}
+            or passive_status == "suspicious"
+        )
+    ):
+        status = "spoof"
+        name = "SPOOF"
+        label = "Phone rectangle strong"
+        extra = ", ".join(phone_rect.get("signals", [])[:3])
+        color = C_SPOOF
     elif passive_status == "block":
         status = "spoof"
         name = "SPOOF"
@@ -1436,6 +1864,10 @@ def process_face(
             suspicious_reasons.append("moire suspicious")
         if screen_context.get("decision") in {"suspicious", "strong"}:
             suspicious_reasons.append(f"context {screen_context.get('decision')}")
+        if phone_rect.get("decision") in {"suspicious", "strong"}:
+            suspicious_reasons.append(f"phone rectangle {phone_rect.get('decision')}")
+        if phone_rect_rolling.get("decision") == "suspicious":
+            suspicious_reasons.append("phone rectangle rolling")
         if passive_status == "suspicious":
             suspicious_reasons.append(f"passive {passive.score:.2f}")
         if challenge.fail_count >= 2:
@@ -1479,7 +1911,7 @@ def process_face(
         if status == "present":
             name = match.name
             label = f"ID:{match.student_id} Conf:{match.score:.0%}"
-            extra = f"Emb:{emb_count} Moire:{rolling.get('decision')} Ctx:{screen_context.get('decision')} Live:OK"
+            extra = f"Emb:{emb_count} Moire:{rolling.get('decision')} Ctx:{screen_context.get('decision')} Phone:{phone_rect.get('decision')} Live:OK"
             color = C_PRESENT
         elif status == "challenge":
             name = "VERIFY"
@@ -1523,6 +1955,8 @@ def process_face(
         "moire": moire,
         "rolling": rolling,
         "screen_context": screen_context,
+        "phone_rect": phone_rect,
+        "phone_rect_rolling": phone_rect_rolling,
         "liveness": live,
         "passive": {
             "score": float(passive.score),
@@ -1550,7 +1984,7 @@ def process_face(
 def main():
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     print("=" * 72)
-    print("  Detect V4.1 Research - Moire + screen context + challenge-first")
+    print("  Detect V4.2 Research - Moire + context + phone rectangle + challenge")
     print("=" * 72)
     print("This script is local/OpenCV only and does not change production web.")
 
@@ -1564,6 +1998,7 @@ def main():
     liveness = StreamingLivenessTracker()
     moire_detector = MoireDetectorV4()
     context_detector = ScreenContextDetectorV41()
+    phone_rect_detector = PhoneRectangleDetectorV42()
     challenge = ChallengeControllerV4()
     cal_logger = CalibrationLogger(METRICS_LOG_PATH)
 
@@ -1585,7 +2020,7 @@ def main():
         print(f"ERROR: Cannot open camera index {CAM_INDEX}")
         return
 
-    win_name = "Live Face Detection V4.1"
+    win_name = "Live Face Detection V4.2"
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
     total_w = FRAME_W + INFO_PANEL_W
     total_h = FRAME_H
@@ -1593,6 +2028,7 @@ def main():
     cv2.resizeWindow(win_name, int(total_w * fit_scale), int(total_h * fit_scale))
 
     rolling_by_face: dict[int, RollingMoireDecision] = defaultdict(RollingMoireDecision)
+    phone_rolling_by_face: dict[int, RollingPhoneRectDecision] = defaultdict(RollingPhoneRectDecision)
     last_moire: dict[int, dict[str, Any]] = {}
     last_rolling: dict[int, dict[str, Any]] = {}
     last_results: list[dict[str, Any]] = []
@@ -1645,6 +2081,7 @@ def main():
                             last_moire.clear()
                             last_rolling.clear()
                             rolling_by_face.clear()
+                            phone_rolling_by_face.clear()
 
                     for idx, face in enumerate(faces):
                         if face.embedding is None or len(face.embedding) == 0:
@@ -1659,7 +2096,9 @@ def main():
                             liveness=liveness,
                             moire_detector=moire_detector,
                             context_detector=context_detector,
+                            phone_rect_detector=phone_rect_detector,
                             rolling_by_face=rolling_by_face,
+                            phone_rolling_by_face=phone_rolling_by_face,
                             last_moire=last_moire,
                             last_rolling=last_rolling,
                             run_moire=run_moire,
@@ -1696,6 +2135,11 @@ def main():
                     mx1, my1, mx2, my2 = result.get("moire_roi_bbox", result["bbox"])
                     cv2.rectangle(frame, (mx1, my1), (mx2, my2), C_PURPLE, 1, cv2.LINE_AA)
                     draw_moire_spectrum(frame, safe_roi(frame, result.get("moire_roi_bbox", result["bbox"])), x1, y1)
+                    phone_roi = result.get("phone_rect", {}).get("roi_bbox", [])
+                    if len(phone_roi) == 4:
+                        px1, py1, px2, py2 = phone_roi
+                        cv2.rectangle(frame, (px1, py1), (px2, py2), C_GOLD, 1, cv2.LINE_AA)
+                    draw_phone_rectangle_overlay(frame, result.get("phone_rect"), result.get("phone_rect_rolling", {}))
 
             draw_challenge_overlay(frame, challenge)
             draw_hud(
@@ -1709,7 +2153,7 @@ def main():
                 cal_logger.enabled,
                 debug_enabled,
             )
-            perf_text = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  FFT:128  Ctx:ON  Skip:{MOIRE_EVERY_N_DETECT - 1}/{MOIRE_EVERY_N_DETECT}  View:{policy_views[policy_view_index]}"
+            perf_text = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  FFT:128  Ctx:ON  PhoneRect:ON  Skip:{MOIRE_EVERY_N_DETECT - 1}/{MOIRE_EVERY_N_DETECT}  View:{policy_views[policy_view_index]}"
             cv2.putText(frame, perf_text, (S(14), S(78)), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
 
             display_frame = (
