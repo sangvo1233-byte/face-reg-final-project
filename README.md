@@ -1,104 +1,186 @@
 # Face Attendance System
 
-A real-time automated attendance system using face recognition with multi-layer anti-spoofing defense. Built on InsightFace ArcFace embeddings, served through a FastAPI backend and a Material Design 3 web dashboard.
+Real-time face attendance system built with FastAPI, InsightFace ArcFace embeddings, SQLite, and a vanilla JavaScript web dashboard. The current production web flow uses multi-angle enrollment, Scan V3 recognition, passive anti-spoofing, and active challenge verification for suspicious scans.
 
 ---
 
-## Recognition Pipeline
+## Overview
 
-```
-Camera Frame
-    |
-    v
-[1] Detection        InsightFace RetinaFace       Bounding box + 5 facial landmarks
-    |
-    v
-[2] Alignment        ArcFace alignment            Normalize face to 112x112 px
-    |
-    v
-[3] Feature          ArcFace (buffalo_l)           512-dimensional embedding vector
-    Extraction
-    |
-    v
-[4] Anti-Spoof       Layer 1: Moire FFT           Screen replay detection (passive)
-    Gate              Layer 2: Challenge-Response   Random action verification (active)
-                      Layer 3: Multi-frame EAR      Blink + movement tracking
-    |
-    v
-[5] Matching         Cosine similarity >= 0.52     Compare against stored embeddings -> mark attendance
-```
+The project has two main usage paths:
+
+| Path | Purpose | Status |
+|---|---|---|
+| Web dashboard | Production-oriented attendance UI and API workflow | Primary |
+| `dev/` scripts | Standalone research and debugging tools | Reference / experimental |
+
+The web dashboard is the current default path. It uses:
+
+- `/api/enroll/v2` for camera/manual multi-angle enrollment.
+- `/api/scan/v3` for attendance scanning.
+- `/api/scan/v3/challenge` for suspicious-frame active verification.
+- Modular frontend files under `web/js/`.
 
 ---
 
-## Anti-Spoofing Architecture (V2/V3)
+## Production Web Flow
 
-The system implements a defense-in-depth strategy against presentation attacks:
+```text
+Camera frame
+  -> InsightFace face detection
+  -> ArcFace embedding extraction
+  -> Moire score check
+  -> Passive liveness score check
+  -> Cosine match against active embeddings
+  -> If clean: mark attendance
+  -> If suspicious: create active challenge
+  -> If challenge passes: mark attendance
+```
 
-| Layer | Method | Type | Detects |
-|-------|--------|------|---------|
-| 1 | Moire Pattern (FFT) | Passive | Video replays on LCD/OLED screens |
-| 2 | Challenge-Response | Active | Pre-recorded video attacks |
-| 3 | Multi-frame Liveness (EAR) | Passive | Printed photos, static images |
+Challenge is only triggered for suspicious-but-not-hard-blocked scans. A hard spoof signal is blocked before matching. A clean real face should pass directly without challenge.
 
-All layers operate using standard 2D webcams. No depth camera or infrared sensor required.
+Current challenge actions:
 
-See [dev/README.md](dev/README.md) for full technical documentation of the anti-spoofing methodology.
+| Action | Backend signal |
+|---|---|
+| `turn_left` | InsightFace 5-point landmark nose displacement |
+| `turn_right` | InsightFace 5-point landmark nose displacement |
+| `blink` | MediaPipe FaceMesh EAR across multiple browser frames |
+
+Not implemented in production web yet: smile, nod, wink, multi-step challenge sequences.
+
+---
+
+## Web Features
+
+### Dashboard
+
+- Start and end attendance sessions.
+- Camera source selection: server webcam, browser camera, phone camera, demo video.
+- Auto scan using Scan V3.
+- Attendance log showing student names, IDs, and classes.
+- In-camera success confirmation overlay with face evidence, student info, confidence, session, and countdown.
+- In-camera challenge overlay with action cue for left/right/blink.
+
+### Enrollment
+
+- Browser-camera-first enrollment.
+- Manual upload fallback.
+- V2 multi-angle flow: front, left, right.
+- Per-angle validation through `/api/enroll/v2/validate`.
+- Multi-frame capture per angle.
+- All-or-nothing save: all three angles must pass before replacing embeddings.
+- Re-enrollment updates metadata and replaces embeddings transactionally.
+
+### Students
+
+- Active / Archived views.
+- Student detail modal.
+- Edit name and class.
+- Re-enroll face data.
+- Archive and restore students.
+- Student photo endpoint with path traversal protection.
+
+### History
+
+- Session list.
+- Session result detail from `/api/session/{id}/result`.
+- Present/absent breakdown based on the session student snapshot.
+
+---
+
+## Anti-Spoofing
+
+Production web anti-spoofing is implemented in layers:
+
+| Layer | File | Purpose |
+|---|---|---|
+| Moire FFT | `core/moire.py` | Detect screen replay artifacts |
+| Passive liveness | `core/anti_spoof.py` | Texture, reflection, and color heuristics |
+| Active challenge | `core/challenge_v3.py` | Require left/right/blink response when suspicious |
+| Scan orchestration | `core/detect_v3.py` | Decide pass, block, challenge, or unknown |
+
+Current decision bands are configured in `config.py`:
+
+```python
+DETECT_V3_MOIRE_BLOCK_THRESHOLD = 0.25
+DETECT_V3_MOIRE_CHALLENGE_THRESHOLD = 0.42
+DETECT_V3_LIVENESS_BLOCK_THRESHOLD = 0.32
+DETECT_V3_LIVENESS_CHALLENGE_THRESHOLD = 0.50
+```
+
+The standalone research scripts in `dev/` contain additional challenge ideas such as smile, nod, wink, and FaceLandmarker-based tracking. Those are not the current production web path unless explicitly integrated into `core/challenge_v3.py`.
 
 ---
 
 ## Project Structure
 
-```
-face-reg-final-project/
+```text
+face-reg-finnal-project/
 |
-|-- main.py                     Entry point - FastAPI application server
-|-- config.py                   System-wide configuration (thresholds, paths, ports)
-|-- requirements.txt            Python dependencies
-|-- start_tunnel.bat            Cloudflare tunnel launcher script
+|-- main.py                       FastAPI entry point
+|-- config.py                     Paths, thresholds, server config
+|-- requirements.txt              Python dependencies
+|-- start_tunnel.bat              Cloudflare tunnel helper
 |
-|-- app/                        API layer
+|-- app/
 |   |-- routes/
-|       |-- attendance.py       Session management (/api/session/*) and scan endpoint
-|       |-- enrollment.py       Student registration (/api/enroll, /api/students/*)
-|       |-- live.py             MJPEG camera stream (/api/live/stream)
-|       |-- phone_camera.py     WebSocket phone camera relay (/ws/phone-camera)
-|       |-- system.py           System status endpoint (/api/system/status)
+|       |-- attendance.py         Sessions, legacy /api/scan
+|       |-- enrollment.py         V1 enroll, students CRUD, photo/evidence
+|       |-- enrollment_v2.py      V2 multi-angle enrollment endpoints
+|       |-- live.py               Server webcam MJPEG stream
+|       |-- phone_camera.py       Phone camera WebSocket + MJPEG stream
+|       |-- scan_v3.py            Scan V3 and challenge endpoints
+|       |-- system.py             System status and capabilities
+|       |-- __init__.py           Route aggregation
 |
-|-- core/                       Business logic layer
-|   |-- face_engine.py          FaceEngine: detection, alignment, embedding, matching
-|   |-- anti_spoof.py           Liveness detection (LBP texture + gradient analysis)
-|   |-- liveness.py             Multi-frame liveness (EAR blink + head movement)
-|   |-- database.py             SQLite data access layer (students, sessions, attendance)
-|   |-- camera.py               Webcam streaming (MJPEG)
-|   |-- schemas.py              Pydantic data models
+|-- core/
+|   |-- anti_spoof.py             Passive liveness heuristics
+|   |-- camera.py                 Server webcam wrapper
+|   |-- challenge_v3.py           Active challenge verification
+|   |-- database.py               SQLite data access and transactions
+|   |-- detect_v3.py              Scan V3 orchestration
+|   |-- enrollment_v2.py          Multi-angle enrollment service
+|   |-- face_engine.py            InsightFace detection, embeddings, matching
+|   |-- liveness.py               Optional MediaPipe FaceLandmarker tracker
+|   |-- moire.py                  FFT moire detector
+|   |-- schemas.py                Dataclass result models
 |
-|-- web/                        Frontend
-|   |-- index.html              Main dashboard (Material Design 3 dark theme)
-|   |-- app.js                  Dashboard logic (session control, scan, real-time log)
-|   |-- style.css               Dashboard styles
-|   |-- phone.html              Mobile camera client
-|   |-- phone.js                WebSocket camera streaming logic
-|   |-- phone_style.css         Mobile client styles
+|-- web/
+|   |-- index.html                Main dashboard
+|   |-- style.css                 Dashboard styles
+|   |-- phone.html                Phone camera client
+|   |-- phone.js                  Phone WebSocket camera sender
+|   |-- phone_style.css           Phone client styles
+|   |-- js/
+|       |-- api.js                Fetch wrapper
+|       |-- enrollment.js         V2 camera/manual enrollment UI
+|       |-- history.js            Session history UI
+|       |-- main.js               Frontend module entry
+|       |-- scan.js               Camera source, Scan V3, challenge, success overlay
+|       |-- session.js            Start/end session UI
+|       |-- state.js              Shared frontend state
+|       |-- students.js           Students CRUD UI
+|       |-- ui.js                 Theme, tabs, toast, modal helpers
 |
-|-- dev/                        Standalone development tools
-|   |-- README.md               Technical reference (anti-spoofing methodology)
-|   |-- enroll.py               V1 enrollment: single-photo, 3s countdown
-|   |-- enroll-v2.py            V2 enrollment: multi-angle (3 poses), multi-frame averaging
-|   |-- detect.py               V1 detection: recognition + basic liveness
-|   |-- detect-v2.py            V2 detection: + Moire FFT + Challenge-Response
-|   |-- detect-v3.py            V3 detection: + stricter threshold + performance optimized
+|-- dev/
+|   |-- README.md                 Research notes
+|   |-- enroll.py                 Standalone V1 enrollment
+|   |-- enroll-v2.py              Standalone V2 multi-angle enrollment
+|   |-- detect.py                 Standalone V1 detection
+|   |-- detect-v2.py              Standalone V2 detection research
+|   |-- detect-v3.py              Standalone V3 detection research
 |
 |-- tests/
-|   |-- test_core.py            Unit tests for face engine and database layer
-|   |-- run_test.py             Test runner
+|   |-- run_test.py               Test runner
+|   |-- test_core.py              Core smoke tests
+|   |-- test_v2_v3.py             V2/V3 API and service tests
 |
-|-- models/                     Pre-trained model files (auto-downloaded)
-|   |-- buffalo_l/              InsightFace RetinaFace + ArcFace
-|   |-- face_landmarker.task    MediaPipe FaceLandmarker (download separately)
-|
-|-- database/                   SQLite database (auto-created at runtime)
-|-- logs/                       Evidence images and face crops (auto-created at runtime)
+|-- models/                       InsightFace models are auto-downloaded here
+|-- database/                     Runtime SQLite DB and backups
+|-- logs/                         Runtime evidence images and face crops
 ```
+
+`web/app.js` may still exist as legacy code, but the dashboard entry point is `web/js/main.js`.
 
 ---
 
@@ -106,126 +188,218 @@ face-reg-final-project/
 
 ### Requirements
 
-- Python 3.9 or higher
-- CUDA-capable GPU recommended (NVIDIA RTX series tested)
-- Conda environment recommended
+- Python 3.9 or higher.
+- Conda environment recommended.
+- CUDA-capable NVIDIA GPU recommended, but CPU can run for development.
+- Modern browser with camera permissions for browser-camera enrollment/scan.
 
 ### Setup
 
 ```bash
 conda create -n face-att python=3.10
 conda activate face-att
-
 pip install -r requirements.txt
 ```
 
-**GPU acceleration:** Replace `onnxruntime` with `onnxruntime-gpu` in `requirements.txt` before installing.
+For GPU acceleration, install an appropriate `onnxruntime-gpu` build instead of CPU-only `onnxruntime`.
 
-**MediaPipe model (required for V2/V3 anti-spoofing):**
+### MediaPipe Notes
+
+Production blink challenge uses `mediapipe.solutions.face_mesh`, which is provided by the `mediapipe` package.
+
+`models/face_landmarker.task` is only required if you use `core/liveness.py` or the FaceLandmarker research path in `dev/`.
+
+Optional FaceLandmarker download:
 
 ```bash
-# Download face_landmarker.task to models/ directory
 curl -o models/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
 ```
 
-### Running the Server
+---
+
+## Running
 
 ```bash
 python main.py
 ```
 
-Open the dashboard at: `http://localhost:8000`
+Open:
 
-### Remote Access / Mobile Camera
+```text
+http://localhost:8000
+```
+
+Phone camera page:
+
+```text
+http://localhost:8000/phone
+```
+
+Cloudflare tunnel:
 
 ```bash
-# Start Cloudflare tunnel (Windows)
 start_tunnel.bat
+```
 
-# Or manually:
+Or manually:
+
+```bash
 cloudflared tunnel --url http://localhost:8000
 ```
 
-Use the generated `https://*.trycloudflare.com` URL on the mobile device, navigate to `/phone`, and select **Phone** as the camera source in the dashboard.
+When using Cloudflare, browser camera permissions require HTTPS, so the tunnel URL is useful for camera testing.
 
 ---
 
-## Development Tools
+## API Reference
 
-Standalone scripts in `dev/` that run independently of the web server.
+### Sessions
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/session/start` | Start active session |
+| `POST` | `/api/session/end` | End active session and compute summary |
+| `GET` | `/api/session/active` | Get current active session |
+| `GET` | `/api/session/{session_id}/result` | Session present/absent detail |
+| `GET` | `/api/sessions` | List sessions |
+| `GET` | `/api/session/attendance` | Current session attendance |
+
+### Students
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/students?view=active|archived|all` | List students by status |
+| `GET` | `/api/students/{student_id}` | Student detail, embedding count, history |
+| `PUT` | `/api/students/{student_id}` | Update name/class metadata |
+| `DELETE` | `/api/students/{student_id}` | Archive student, preserve embeddings |
+| `POST` | `/api/students/{student_id}/restore` | Restore archived student |
+| `GET` | `/api/students/{student_id}/photo` | Serve student face crop |
+| `GET` | `/api/evidence/{filename}` | Serve attendance evidence image |
 
 ### Enrollment
 
-| Script | Method | Embeddings | Accuracy |
-|--------|--------|-----------|----------|
-| `python dev/enroll.py` | Single photo, 3s countdown | 1 | Baseline |
-| `python dev/enroll-v2.py` | 3 angles x multi-frame averaging | 3 | Higher |
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/enroll` | Legacy V1 single-image enrollment |
+| `POST` | `/api/enroll/v2` | V2 front/left/right multi-angle enrollment |
+| `POST` | `/api/enroll/v2/validate` | Validate one angle image before save |
 
-**Recommended:** Use `enroll-v2.py` for production. Guides the user through frontal, left, and right poses, collects 3-8 high-quality frames per pose, averages them, and stores 3 robust embeddings per student.
+### Scan
 
-### Detection
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/scan` | Legacy V1 scan |
+| `POST` | `/api/scan/v3` | Default web scan API |
+| `POST` | `/api/scan/v3/challenge` | Verify suspicious scan with frame batch |
 
-| Script | Anti-Spoof | Threshold | FPS (GPU) |
-|--------|-----------|-----------|-----------|
-| `python dev/detect.py` | EAR only | 0.45 | ~26 |
-| `python dev/detect-v2.py` | Moire + Challenge + EAR | 0.45 | ~16 |
-| `python dev/detect-v3.py` | Moire + Challenge + EAR (optimized) | 0.52 | ~22 |
+### Camera / System
 
-**Recommended pairing:**
-- `enroll-v2.py` + `detect-v3.py` for maximum accuracy and security
-- `enroll.py` + `detect-v2.py` for backward compatibility
-
-### Controls (all detect scripts)
-
-| Key | Action |
-|-----|--------|
-| `Q` | Quit |
-| `S` | Save screenshot to `dev/screenshots/` |
-| `R` | Reload face embeddings cache |
-| `L` | Toggle landmark visualization |
-| `I` | Toggle information panel |
-| `M` | Toggle moire overlay (V2/V3 only) |
-| `E` | Print embedding statistics (V3 only) |
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/live/stream` | Server webcam MJPEG stream |
+| `GET` | `/api/live/phone-stream` | Phone camera MJPEG stream |
+| `GET` | `/api/phone/status` | Phone camera connection status |
+| `GET` | `/api/phone/latest` | Latest phone frame if fresh |
+| `WS` | `/ws/phone-camera` | Phone camera frame upload |
+| `GET` | `/api/system/status` | Runtime status |
+| `GET` | `/api/system/capabilities` | API versions and feature flags |
 
 ---
 
 ## Configuration
 
-All configuration is defined in `config.py`.
+All main settings live in `config.py`.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `MATCH_THRESHOLD` | `0.45` | Minimum cosine similarity to accept a match |
-| `PORT` | `8000` | Server port |
+| Parameter | Default | Purpose |
+|---|---:|---|
+| `COSINE_THRESHOLD` | `0.45` | Legacy/default match threshold |
+| `DETECT_V3_COSINE_THRESHOLD` | `0.52` | Scan V3 strict match threshold |
+| `DETECT_V3_MOIRE_SCREEN_THRESHOLD` | `0.30` | Legacy moire screen threshold |
+| `DETECT_V3_MOIRE_BLOCK_THRESHOLD` | `0.25` | Hard block if moire score is lower |
+| `DETECT_V3_MOIRE_CHALLENGE_THRESHOLD` | `0.42` | Challenge if moire score is below this band |
+| `DETECT_V3_LIVENESS_BLOCK_THRESHOLD` | `0.32` | Hard block if passive liveness is lower |
+| `DETECT_V3_LIVENESS_CHALLENGE_THRESHOLD` | `0.50` | Challenge if passive liveness is below this band |
+| `DETECT_V3_CHALLENGE_TTL_SECONDS` | `10` | Challenge expiry window |
+| `DETECT_V3_CHALLENGE_MIN_FRAMES` | `3` | Minimum challenge frames |
+| `DETECT_V3_CHALLENGE_MAX_FRAMES` | `36` | Maximum challenge frames analyzed |
+| `DETECT_V3_BLINK_EAR_CLOSED_THRESHOLD` | `0.21` | Blink closed-eye EAR threshold |
+| `DETECT_V3_BLINK_EAR_OPEN_THRESHOLD` | `0.24` | Blink open-eye EAR threshold |
+| `ENROLL_V2_BLUR_MIN` | `80.0` | Minimum blur/quality score per angle |
+| `ENROLL_V2_POSE_FRONT_MAX_DISP` | `0.12` | Max nose displacement for front |
+| `ENROLL_V2_POSE_TURN_THRESHOLD` | `0.04` | Min displacement for left/right |
+| `CAMERA_SOURCE` | `0` | Server webcam index or camera source |
 | `HOST` | `0.0.0.0` | Server bind address |
-| `ENROLL_SCAN_DURATION` | `5` | Camera capture duration during enrollment (seconds) |
-| `ENROLL_MIN_FRAMES` | `3` | Minimum frames with detected face required to enroll |
-| `QUALITY_MAX_BLUR` | `100.0` | Laplacian variance threshold for blur rejection |
-| `CAMERA_SOURCE` | `0` | Webcam index, or RTSP URL for IP cameras |
-
-Note: `detect-v3.py` overrides the cosine threshold to 0.52. This stricter threshold is designed for multi-angle enrolled databases (3+ embeddings per student).
+| `PORT` | `8000` | Server port |
 
 ---
 
-## Key Dependencies
+## Development / Research Tools
 
-| Package | Purpose |
-|---------|---------|
-| `insightface` | Face detection (RetinaFace) and embedding (ArcFace) |
-| `onnxruntime` / `onnxruntime-gpu` | ONNX model inference |
-| `mediapipe` | FaceLandmarker for liveness and pose verification |
-| `fastapi` | Web API framework |
-| `uvicorn[standard]` | ASGI server with WebSocket support |
-| `opencv-python` | Camera capture and image processing |
-| `numpy` | Numerical operations, FFT, vector arithmetic |
-| `loguru` | Structured logging |
+The `dev/` scripts are standalone tools and may contain research features not yet integrated into the web production path.
+
+### Enrollment Scripts
+
+| Script | Method | Notes |
+|---|---|---|
+| `python dev/enroll.py` | Single image | V1 baseline |
+| `python dev/enroll-v2.py` | Front/left/right multi-angle | Research/reference for V2 flow |
+
+### Detection Scripts
+
+| Script | Anti-spoofing | Notes |
+|---|---|---|
+| `python dev/detect.py` | Basic liveness | V1 baseline |
+| `python dev/detect-v2.py` | Moire + active challenge research | Experimental |
+| `python dev/detect-v3.py` | Moire + challenge + stricter threshold | Research/reference |
+
+Do not assume every `dev/` feature is active in the web API. The production web integration is defined by `core/detect_v3.py` and `core/challenge_v3.py`.
 
 ---
 
-## How It Works
+## Testing
 
-**Enrollment:** A face is captured and passed through the InsightFace pipeline to produce a 512-dimensional embedding vector. In V2 enrollment, this process is repeated at three head poses (frontal, left, right), with multiple frames averaged per pose to reduce noise. All embeddings are stored in the SQLite database.
+Run JavaScript syntax checks:
 
-**Attendance:** Each camera frame goes through the detection pipeline. Before matching, the anti-spoof gate checks for screen replay attacks (Moire FFT analysis), challenges suspicious inputs with random actions (blink, turn, smile), and verifies natural facial dynamics over time (multi-frame liveness). Only faces that pass all checks proceed to cosine similarity matching against stored embeddings.
+```bash
+node --check web/js/api.js
+node --check web/js/state.js
+node --check web/js/ui.js
+node --check web/js/session.js
+node --check web/js/students.js
+node --check web/js/enrollment.js
+node --check web/js/history.js
+node --check web/js/scan.js
+node --check web/js/main.js
+```
 
-**Similarity Threshold:** Setting a higher threshold requires a closer match and reduces false positives, but may cause legitimate users to fail recognition if their appearance varies. V3 uses 0.52 (stricter), which is viable because multi-angle enrollment produces more robust centroid embeddings that score higher for genuine matches.
+Run focused V2/V3 tests:
+
+```bash
+python -m pytest tests/test_v2_v3.py -q
+```
+
+Run full tests:
+
+```bash
+python -m pytest tests -q
+```
+
+Manual browser smoke test:
+
+- Hard refresh the dashboard with `Ctrl + F5`.
+- Start a session.
+- Enroll a student through browser camera.
+- Scan with `/api/scan/v3`.
+- Verify success overlay appears inside the camera frame.
+- Test suspicious conditions and verify challenge overlay for left/right/blink.
+- End session and inspect history details.
+
+---
+
+## Known Limitations
+
+- Challenge state is in-memory and process-local. Multiple FastAPI workers would require Redis or another shared store.
+- Blink challenge uses regular 2D webcam frames. It improves replay resistance but is not equivalent to hardware depth sensing.
+- Passive liveness thresholds require real camera tuning. Poor lighting, compression, or reflective glasses can still trigger challenge.
+- Phone camera and Cloudflare workflows depend on browser/network permissions and fresh frame delivery.
+- Some comments in older source files may contain mojibake from prior encoding issues; runtime behavior is unaffected.
