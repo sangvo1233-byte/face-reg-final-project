@@ -94,6 +94,7 @@ C_CYAN = (220, 200, 40)
 C_PURPLE = (180, 60, 200)
 C_ORANGE = (40, 140, 255)
 C_BLUE = (220, 140, 40)
+C_GOLD = (30, 200, 255)
 C_GREEN_DARK = (20, 90, 45)
 
 
@@ -118,7 +119,8 @@ def _get_screen_info() -> tuple[int, int, float]:
 
 
 SCREEN_W, SCREEN_H, UI_SCALE = _get_screen_info()
-INFO_PANEL_W = int(410 * UI_SCALE)
+INFO_PANEL_W = int(380 * UI_SCALE)
+LANDMARK_LABELS = ["L-Eye", "R-Eye", "Nose", "L-Mouth", "R-Mouth"]
 
 
 def S(value: int | float) -> int:
@@ -638,164 +640,305 @@ class CalibrationLogger:
 
 
 def draw_rounded_rect(img, pt1, pt2, color, thickness=2, radius=12):
+    """V3-style rounded rectangle."""
     x1, y1 = pt1
     x2, y2 = pt2
-    cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, thickness)
-    cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, thickness)
-    cv2.ellipse(img, (x1 + radius, y1 + radius), (radius, radius), 180, 0, 90, color, thickness)
-    cv2.ellipse(img, (x2 - radius, y1 + radius), (radius, radius), 270, 0, 90, color, thickness)
-    cv2.ellipse(img, (x1 + radius, y2 - radius), (radius, radius), 90, 0, 90, color, thickness)
-    cv2.ellipse(img, (x2 - radius, y2 - radius), (radius, radius), 0, 0, 90, color, thickness)
+    radius = min(radius, abs(x2 - x1) // 2, abs(y2 - y1) // 2)
+    if radius < 1:
+        cv2.rectangle(img, pt1, pt2, color, thickness, cv2.LINE_AA)
+        return
+    cv2.line(img, (x1 + radius, y1), (x2 - radius, y1), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x1 + radius, y2), (x2 - radius, y2), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x1, y1 + radius), (x1, y2 - radius), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x2, y1 + radius), (x2, y2 - radius), color, thickness, cv2.LINE_AA)
+    cv2.ellipse(img, (x1 + radius, y1 + radius), (radius, radius), 180, 0, 90, color, thickness, cv2.LINE_AA)
+    cv2.ellipse(img, (x2 - radius, y1 + radius), (radius, radius), 270, 0, 90, color, thickness, cv2.LINE_AA)
+    cv2.ellipse(img, (x1 + radius, y2 - radius), (radius, radius), 90, 0, 90, color, thickness, cv2.LINE_AA)
+    cv2.ellipse(img, (x2 - radius, y2 - radius), (radius, radius), 0, 0, 90, color, thickness, cv2.LINE_AA)
 
 
 def draw_label_box(img, title, line_1, line_2, x1, y1, color):
-    x1 = max(S(10), x1)
-    y_top = max(S(10), y1 - S(78))
-    w = S(360)
-    h = S(70)
+    """V3-style filled label above the bounding box."""
+    line_count = 1 + (1 if line_1 else 0) + (1 if line_2 else 0)
+    label_h = S(22) * line_count + S(8)
+    lx1, ly1 = x1, max(0, y1 - label_h)
+    lx2, ly2 = x1 + max(S(240), len(title) * S(13) + S(24)), y1
     overlay = img.copy()
-    cv2.rectangle(overlay, (x1, y_top), (x1 + w, y_top + h), (22, 22, 26), -1)
-    cv2.addWeighted(overlay, 0.78, img, 0.22, 0, img)
-    cv2.rectangle(img, (x1, y_top), (x1 + w, y_top + h), color, 1)
-    cv2.putText(img, title[:28], (x1 + S(10), y_top + S(24)), FONT, FS(0.52), C_WHITE, 1, cv2.LINE_AA)
-    cv2.putText(img, line_1[:38], (x1 + S(10), y_top + S(45)), FONT_SMALL, FS(0.44), color, 1, cv2.LINE_AA)
+    cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), color, -1)
+    cv2.addWeighted(overlay, 0.82, img, 0.18, 0, img)
+    y_off = ly1 + S(18)
+    cv2.putText(img, title[:28], (lx1 + S(8), y_off), FONT, FS(0.52), C_WHITE, 1, cv2.LINE_AA)
+    if line_1:
+        y_off += S(20)
+        cv2.putText(img, line_1[:38], (lx1 + S(8), y_off), FONT_SMALL, FS(0.48), C_WHITE, 1, cv2.LINE_AA)
     if line_2:
-        cv2.putText(img, line_2[:46], (x1 + S(10), y_top + S(62)), FONT_SMALL, FS(0.38), C_DIM, 1, cv2.LINE_AA)
+        y_off += S(20)
+        cv2.putText(img, line_2[:46], (lx1 + S(8), y_off), FONT_SMALL, FS(0.48), C_GOLD, 1, cv2.LINE_AA)
 
 
 def draw_landmarks(img, landmarks, color=C_CYAN):
-    if landmarks is None:
+    """V3-style 5-point landmark overlay."""
+    if landmarks is None or len(landmarks) < 5:
         return
-    for x, y in landmarks[:5]:
-        cv2.circle(img, (int(x), int(y)), S(3), color, -1, cv2.LINE_AA)
+    for i, (x, y) in enumerate(landmarks[:5]):
+        px, py = int(x), int(y)
+        cv2.circle(img, (px, py), S(5), color, 2, cv2.LINE_AA)
+        cv2.circle(img, (px, py), S(2), C_WHITE, -1, cv2.LINE_AA)
+        label = LANDMARK_LABELS[i] if i < len(LANDMARK_LABELS) else str(i)
+        cv2.putText(img, label, (px + S(7), py - S(4)), FONT_SMALL, FS(0.42), color, 1, cv2.LINE_AA)
 
 
 def conf_bar(img, x1, y2, x2, confidence, color):
-    y = min(img.shape[0] - S(12), y2 + S(8))
-    width = max(1, x2 - x1)
-    fill = int(width * clamp(confidence))
-    cv2.rectangle(img, (x1, y), (x2, y + S(5)), (50, 50, 55), -1)
-    cv2.rectangle(img, (x1, y), (x1 + fill, y + S(5)), color, -1)
+    """V3-style confidence bar below bbox."""
+    bar_w = x2 - x1
+    bar_h = S(6)
+    filled = int(bar_w * clamp(confidence))
+    cv2.rectangle(img, (x1, y2 + S(4)), (x2, y2 + S(4) + bar_h), C_BLACK, -1)
+    cv2.rectangle(img, (x1, y2 + S(4)), (x1 + filled, y2 + S(4) + bar_h), color, -1)
 
 
 def draw_moire_badge(img, x2, y2, moire, rolling):
+    """V3-style compact moire badge, extended with V4 SUSPECT state."""
     if not moire:
         return
     decision = rolling.get("decision") or moire.get("decision_hint", "clean")
-    score = float(moire.get("raw_score", moire.get("moire_score", 1.0)))
+    score = float(moire.get("moire_score", moire.get("raw_score", 1.0)))
     if decision == "block":
-        label, color = "SCREEN", C_SPOOF
+        txt, color = "SCREEN", C_SPOOF
     elif decision == "suspicious":
-        label, color = "SUSPECT", C_ORANGE
+        txt, color = "SUSPECT", C_ORANGE
     elif decision == "checking":
-        label, color = "CHECK", C_UNKNOWN
+        txt, color = "?", C_GOLD
     else:
-        label, color = "CLEAN", C_PRESENT
-    text = f"{label} {score:.0%}"
-    bx = max(S(8), x2 - S(120))
-    by = min(img.shape[0] - S(34), y2 + S(18))
-    cv2.rectangle(img, (bx, by), (bx + S(116), by + S(28)), (25, 25, 28), -1)
-    cv2.rectangle(img, (bx, by), (bx + S(116), by + S(28)), color, 1)
-    cv2.putText(img, text, (bx + S(8), by + S(19)), FONT_SMALL, FS(0.42), color, 1, cv2.LINE_AA)
+        txt, color = "REAL", C_PRESENT
+
+    bx, by = x2 - S(92), y2 + S(14)
+    cv2.rectangle(img, (bx, by), (bx + S(90), by + S(18)), color, -1)
+    cv2.putText(img, f"{txt} {score:.0%}", (bx + S(3), by + S(13)), FONT, FS(0.35), C_WHITE, 1, cv2.LINE_AA)
 
 
 def draw_moire_spectrum(img, face_roi, x1, y1):
+    """V3-style FFT thumbnail near bbox."""
     if face_roi is None or face_roi.size == 0:
         return
     try:
         gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (64, 64))
+        gray = cv2.resize(gray, (64, 64)).astype(np.float32) / 255.0
         window = np.outer(np.hanning(64), np.hanning(64))
-        mag = np.log1p(np.abs(np.fft.fftshift(np.fft.fft2(gray * window))))
-        mag = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        mag = cv2.applyColorMap(mag, cv2.COLORMAP_VIRIDIS)
-        sx = max(0, x1)
-        sy = max(S(10), y1 - S(150))
+        fft = np.fft.fft2(gray * window)
+        mag = np.log1p(np.abs(np.fft.fftshift(fft)))
+        mag = (mag / mag.max() * 255).astype(np.uint8) if mag.max() > 0 else np.zeros((64, 64), np.uint8)
+        mag = cv2.applyColorMap(mag, cv2.COLORMAP_JET)
+        sx, sy = max(0, x1 - S(70)), max(0, y1)
         if sy + 64 < img.shape[0] and sx + 64 < img.shape[1]:
             img[sy:sy + 64, sx:sx + 64] = mag
-            cv2.putText(img, "FFT", (sx + 2, sy + 12), FONT_SMALL, 0.35, C_WHITE, 1, cv2.LINE_AA)
+            cv2.rectangle(img, (sx, sy), (sx + 64, sy + 64), C_PURPLE, 1)
+            cv2.putText(img, "FFT", (sx + 2, sy + 12), FONT, 0.35, C_WHITE, 1, cv2.LINE_AA)
     except Exception:
         return
 
 
 def draw_challenge_overlay(img, challenge: ChallengeControllerV4):
+    """V3-style top challenge banner, backed by V4 challenge state."""
     if not challenge.active and not challenge.message:
         return
 
     h, w = img.shape[:2]
+    if challenge.active:
+        overlay = img.copy()
+        alpha = float(0.55 + 0.15 * np.sin(time.time() * 6))
+        cv2.rectangle(overlay, (0, S(44)), (w, S(110)), (20, 20, 60), -1)
+        cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+
+        text = f">> {challenge.text} <<"
+        text_size = cv2.getTextSize(text, FONT, FS(0.85), 2)[0]
+        text_x = (w - text_size[0]) // 2
+        cv2.putText(img, text, (text_x, S(72)), FONT, FS(0.85), C_ORANGE, 2, cv2.LINE_AA)
+        cv2.putText(img, f"[{challenge.remaining():.1f}s]", (text_x, S(100)), FONT, FS(0.55), C_GOLD, 1, cv2.LINE_AA)
+
+        progress = min(1.0, (time.time() - challenge.started_at) / CHALLENGE_TIMEOUT)
+        bar_w_px = w - S(40)
+        cv2.rectangle(img, (S(20), S(108)), (S(20) + bar_w_px, S(112)), C_DIM, -1)
+        cv2.rectangle(img, (S(20), S(108)), (S(20) + int(bar_w_px * progress), S(112)), C_ORANGE, -1)
+    elif "passed" in challenge.message.lower():
+        cv2.putText(img, "VERIFIED (challenge passed)", (S(20), S(66)), FONT, FS(0.50), C_PRESENT, 1, cv2.LINE_AA)
+    else:
+        cv2.putText(img, challenge.message[:64], (S(20), S(66)), FONT, FS(0.50), C_SPOOF, 1, cv2.LINE_AA)
+
+
+def draw_hud(
+    img,
+    fps,
+    face_count,
+    total_students,
+    show_landmarks,
+    show_info,
+    show_moire,
+    logging_on=False,
+    debug_enabled=False,
+):
+    """V3-style top HUD with small V4 additions."""
+    h, w = img.shape[:2]
+    hud_h = S(44)
     overlay = img.copy()
-    banner_h = S(90)
-    cv2.rectangle(overlay, (S(40), S(32)), (w - S(40), S(32) + banner_h), (28, 28, 32), -1)
-    cv2.addWeighted(overlay, 0.72, img, 0.28, 0, img)
+    cv2.rectangle(overlay, (0, 0), (w, hud_h), C_BLACK, -1)
+    cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
 
-    color = C_ORANGE if challenge.active else (C_PRESENT if "passed" in challenge.message.lower() else C_SPOOF)
-    cv2.rectangle(img, (S(40), S(32)), (w - S(40), S(32) + banner_h), color, 2)
-    label = "ACTIVE CHALLENGE" if challenge.active else "CHALLENGE STATUS"
-    cv2.putText(img, label, (S(62), S(62)), FONT_SMALL, FS(0.50), C_DIM, 1, cv2.LINE_AA)
-    cv2.putText(img, challenge.message[:70], (S(62), S(100)), FONT, FS(0.78), color, 2, cv2.LINE_AA)
-
-
-def draw_hud(img, fps, face_count, total_students, logging_on, policy_view):
-    cv2.putText(img, "Detect V4 Research", (S(14), S(26)), FONT, FS(0.56), C_WHITE, 1, cv2.LINE_AA)
-    meta = (
-        f"FPS:{fps:.1f}  Faces:{face_count}  Students:{total_students}  "
-        f"Log:{'ON' if logging_on else 'OFF'}  View:{policy_view.upper()}"
-    )
-    cv2.putText(img, meta, (S(14), S(52)), FONT_SMALL, FS(0.43), C_DIM, 1, cv2.LINE_AA)
-    controls = "Q quit | S shot | R reload | L landmarks | I panel | M moire | D debug | C log | B view"
-    cv2.putText(img, controls, (S(14), img.shape[0] - S(14)), FONT_SMALL, FS(0.38), C_DIM, 1, cv2.LINE_AA)
+    items = [
+        (f"FPS {fps:5.1f}", C_GOLD),
+        (f"Faces: {face_count}", C_PRESENT if face_count > 0 else C_DIM),
+        (f"DB: {total_students}", C_WHITE),
+        (f"[L]mk:{'ON' if show_landmarks else 'OFF'}", C_CYAN if show_landmarks else C_DIM),
+        (f"[I]nfo:{'ON' if show_info else 'OFF'}", C_BLUE if show_info else C_DIM),
+        (f"[M]oire:{'ON' if show_moire else 'OFF'}", C_PURPLE if show_moire else C_DIM),
+        (f"[D]bg:{'ON' if debug_enabled else 'OFF'}", C_ORANGE if debug_enabled else C_DIM),
+        (f"[C]log:{'ON' if logging_on else 'OFF'}", C_PRESENT if logging_on else C_DIM),
+        ("Q=Quit  S=Shot  R=Reload", C_DIM),
+    ]
+    x = S(14)
+    for txt, color in items:
+        cv2.putText(img, txt, (x, S(29)), FONT_SMALL, FS(0.48), color, 1, cv2.LINE_AA)
+        x += len(txt) * S(8) + S(16)
 
 
 def draw_info_panel(frame, results, challenge, debug_enabled, panel_w=INFO_PANEL_W):
+    """V3-style right panel; V4 only adds moire rolling/debug fields."""
     h, w = frame.shape[:2]
     panel = np.full((h, panel_w, 3), C_PANEL_BG, dtype=np.uint8)
-    y = S(26)
-    cv2.putText(panel, "DETECT V4", (S(14), y), FONT, FS(0.55), C_WHITE, 1, cv2.LINE_AA)
-    cv2.putText(panel, f"Threshold: {V4_COSINE_THRESHOLD:.2f}", (S(14), y + S(26)), FONT_SMALL, FS(0.42), C_DIM, 1, cv2.LINE_AA)
-    y += S(70)
 
+    cv2.putText(panel, "FACE RECOGNITION V4", (S(14), S(28)), FONT, FS(0.55), C_GOLD, 1, cv2.LINE_AA)
+    cv2.putText(panel, f"Thr: {V4_COSINE_THRESHOLD:.0%}", (panel_w - S(90), S(28)), FONT_SMALL, FS(0.45), C_DIM, 1, cv2.LINE_AA)
+    cv2.line(panel, (S(14), S(38)), (panel_w - S(14), S(38)), C_DIM, 1, cv2.LINE_AA)
+
+    y = S(58)
     if challenge.active or challenge.message:
-        cv2.putText(panel, "Challenge", (S(14), y), FONT_SMALL, FS(0.46), C_ORANGE, 1, cv2.LINE_AA)
+        cv2.putText(panel, "ANTI-SPOOF V4", (S(14), y), FONT, FS(0.45), C_ORANGE, 1, cv2.LINE_AA)
         y += S(22)
-        cv2.putText(panel, challenge.message[:34], (S(14), y), FONT_SMALL, FS(0.40), C_WHITE, 1, cv2.LINE_AA)
-        y += S(34)
+        status_txt = challenge.message or challenge.text
+        s_color = C_ORANGE if challenge.active else (C_PRESENT if "passed" in status_txt.lower() else C_SPOOF)
+        max_chars = max(20, panel_w // S(9))
+        while status_txt:
+            chunk = status_txt[:max_chars]
+            status_txt = status_txt[max_chars:]
+            cv2.putText(panel, chunk, (S(14), y), FONT_SMALL, FS(0.45), s_color, 1, cv2.LINE_AA)
+            y += S(18)
+        y += S(6)
+        cv2.line(panel, (S(14), y), (panel_w - S(14), y), (60, 60, 65), 1)
+        y += S(14)
+
+    if not results:
+        cv2.putText(panel, "No faces detected", (S(14), y), FONT, FS(0.45), C_DIM, 1, cv2.LINE_AA)
+        return np.hstack([frame, panel])
 
     for idx, r in enumerate(results[:4]):
-        color = C_PRESENT if r["status"] == "present" else C_SPOOF if r["status"] == "spoof" else C_UNKNOWN
-        cv2.putText(panel, f"Face {idx + 1}: {r['status'].upper()}", (S(14), y), FONT_SMALL, FS(0.45), color, 1, cv2.LINE_AA)
-        y += S(20)
-        cv2.putText(panel, r.get("name", "Unknown")[:32], (S(14), y), FONT_SMALL, FS(0.42), C_WHITE, 1, cv2.LINE_AA)
-        y += S(20)
-        cv2.putText(panel, r.get("label", "")[:38], (S(14), y), FONT_SMALL, FS(0.38), C_DIM, 1, cv2.LINE_AA)
-        y += S(18)
+        if y > h - S(40):
+            break
+
+        color = C_PRESENT if r["status"] == "present" else (C_SPOOF if r["status"] == "spoof" else C_UNKNOWN)
+        cv2.putText(panel, f"--- Face #{idx + 1} ---", (S(14), y), FONT, FS(0.45), color, 1, cv2.LINE_AA)
+        y += S(24)
+
+        if r.get("aligned") is not None:
+            thumb = cv2.resize(r["aligned"], (64, 64))
+            cv2.rectangle(panel, (S(14), y), (S(80), y + S(66)), color, 2)
+            panel[y + 1:y + 65, S(15):S(79)] = thumb
+            tx = S(90)
+            cv2.putText(panel, r.get("name", "Unknown")[:24], (tx, y + S(18)), FONT, FS(0.48), C_WHITE, 1, cv2.LINE_AA)
+            cv2.putText(panel, r["status"].upper(), (tx, y + S(38)), FONT_SMALL, FS(0.45), color, 1, cv2.LINE_AA)
+            if r.get("sid"):
+                cv2.putText(panel, f"ID: {r['sid']}", (tx, y + S(56)), FONT_SMALL, FS(0.45), C_DIM, 1, cv2.LINE_AA)
+            y += S(72)
+        else:
+            cv2.putText(panel, f"Name: {r.get('name', 'Unknown')}", (S(14), y), FONT_SMALL, FS(0.45), C_WHITE, 1, cv2.LINE_AA)
+            y += S(20)
+
+        conf_value = r.get("conf", r.get("confidence", 0.0))
+        conf_pct = conf_value * 100
+        conf_color = C_PRESENT if conf_pct >= 50 else C_UNKNOWN
+        cv2.putText(panel, f"Confidence: {conf_pct:.1f}%", (S(14), y), FONT_SMALL, FS(0.45), conf_color, 1, cv2.LINE_AA)
+        bar_x = S(180)
+        bar_w = panel_w - bar_x - S(16)
+        filled = int(bar_w * clamp(conf_value))
+        cv2.rectangle(panel, (bar_x, y - S(10)), (bar_x + bar_w, y), C_BLACK, -1)
+        cv2.rectangle(panel, (bar_x, y - S(10)), (bar_x + filled, y), conf_color, -1)
+        y += S(22)
+
+        if r.get("det_conf") is not None:
+            cv2.putText(panel, f"Det Score: {r['det_conf']:.2f}", (S(14), y), FONT_SMALL, FS(0.45), C_DIM, 1, cv2.LINE_AA)
+            y += S(20)
 
         moire = r.get("moire", {})
         rolling = r.get("rolling", {})
-        m_text = (
-            f"Moire {rolling.get('decision', 'n/a')}: "
-            f"raw={moire.get('raw_score', 0):.2f} mean={rolling.get('mean_score', 0):.2f}"
-        )
-        cv2.putText(panel, m_text[:42], (S(14), y), FONT_SMALL, FS(0.36), C_PURPLE, 1, cv2.LINE_AA)
-        y += S(18)
+        if moire:
+            decision = rolling.get("decision", moire.get("decision_hint", "clean"))
+            m_color = C_SPOOF if decision == "block" else (C_ORANGE if decision == "suspicious" else C_PRESENT)
+            cv2.putText(panel, f"Moire V4: {moire.get('moire_score', 0):.0%}", (S(14), y), FONT_SMALL, FS(0.45), m_color, 1, cv2.LINE_AA)
+            bar_x2 = S(140)
+            bar_w2 = panel_w - bar_x2 - S(16)
+            filled2 = int(bar_w2 * clamp(moire.get("moire_score", 0.0)))
+            cv2.rectangle(panel, (bar_x2, y - S(10)), (bar_x2 + bar_w2, y), C_BLACK, -1)
+            cv2.rectangle(panel, (bar_x2, y - S(10)), (bar_x2 + filled2, y), m_color, -1)
+            y += S(18)
+            cv2.putText(panel, f"  {decision.upper()} raw:{moire.get('raw_score', 0):.2f} p10:{rolling.get('p10_score', 0):.2f}", (S(14), y), FONT_SMALL, FS(0.42), m_color, 1, cv2.LINE_AA)
+            y += S(18)
+            cv2.putText(panel, f"  Pk:{moire.get('peak_ratio', 0):.1f} Pd:{moire.get('periodicity', 0):.1f} Gr:{moire.get('grid_score', 0):.2f}", (S(14), y), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
+            y += S(18)
+
+        quality = r.get("quality")
+        if quality:
+            cv2.putText(panel, f"Blur: {quality['blur']:.0f}  Bright: {quality['bright']:.0f}", (S(14), y), FONT_SMALL, FS(0.42), C_DIM, 1, cv2.LINE_AA)
+            y += S(18)
+            cv2.putText(panel, f"Yaw: {quality['yaw']:.1f}deg  Size: {quality['size']}px", (S(14), y), FONT_SMALL, FS(0.42), C_DIM, 1, cv2.LINE_AA)
+            y += S(18)
+            q_status = "PASS" if quality["passed"] else "FAIL"
+            q_color = C_PRESENT if quality["passed"] else C_SPOOF
+            cv2.putText(panel, f"Quality: {q_status}", (S(14), y), FONT_SMALL, FS(0.45), q_color, 1, cv2.LINE_AA)
+            y += S(22)
 
         live = r.get("liveness", {})
-        l_text = f"Live {live.get('state', 'n/a')} blink={live.get('blinks', 0)} ear={live.get('ear', 0)}"
-        cv2.putText(panel, l_text[:42], (S(14), y), FONT_SMALL, FS(0.36), C_CYAN, 1, cv2.LINE_AA)
-        y += S(18)
+        if live:
+            state = live.get("state")
+            if state in {"checking", "blink_required"}:
+                lv_color, lv_status = C_GOLD, "CHECKING"
+            elif state == "live":
+                lv_color, lv_status = C_PRESENT, "LIVE"
+            elif state == "spoof":
+                lv_color, lv_status = C_SPOOF, "SPOOF"
+            else:
+                lv_color, lv_status = C_DIM, str(state or "N/A").upper()
+            cv2.putText(panel, f"Liveness: {lv_status}", (S(14), y), FONT_SMALL, FS(0.45), lv_color, 1, cv2.LINE_AA)
+            y += S(20)
+            cv2.putText(panel, f"  Blinks: {live.get('blinks', 0)}  EAR: {live.get('ear', 0):.2f}", (S(14), y), FONT_SMALL, FS(0.42), C_DIM, 1, cv2.LINE_AA)
+            y += S(18)
+            cv2.putText(panel, f"  Movement: {live.get('movement', 0):.1f}px", (S(14), y), FONT_SMALL, FS(0.42), C_DIM, 1, cv2.LINE_AA)
+            y += S(18)
+            cv2.putText(panel, f"  Track: {live.get('track_time', 0):.1f}s", (S(14), y), FONT_SMALL, FS(0.42), C_DIM, 1, cv2.LINE_AA)
+            y += S(18)
 
-        passive = r.get("passive", {})
-        p_text = f"Passive {passive.get('score', 0):.2f} {passive.get('reason', '')[:20]}"
-        cv2.putText(panel, p_text[:42], (S(14), y), FONT_SMALL, FS(0.35), C_DIM, 1, cv2.LINE_AA)
-        y += S(18)
+        if r.get("emb_dim"):
+            emb_count_txt = f"Embedding: {r['emb_dim']}D"
+            if r.get("emb_count"):
+                ec = r["emb_count"]
+                ec_color = C_PRESENT if ec >= 3 else (C_GOLD if ec >= 2 else C_ORANGE)
+                emb_count_txt += f"  Angles: {ec}"
+                cv2.putText(panel, emb_count_txt, (S(14), y), FONT_SMALL, FS(0.45), ec_color, 1, cv2.LINE_AA)
+                y += S(18)
+                enroll_txt = "Multi-angle V2" if ec >= 3 else "Single (re-enroll)"
+                cv2.putText(panel, f"  Enroll: {enroll_txt}", (S(14), y), FONT_SMALL, FS(0.42), ec_color, 1, cv2.LINE_AA)
+            else:
+                cv2.putText(panel, emb_count_txt, (S(14), y), FONT_SMALL, FS(0.45), C_DIM, 1, cv2.LINE_AA)
+            y += S(20)
 
         if debug_enabled:
+            passive = r.get("passive", {})
+            cv2.putText(panel, f"Passive: {passive.get('score', 0):.2f} {passive.get('decision', '')}", (S(14), y), FONT_SMALL, FS(0.35), C_DIM, 1, cv2.LINE_AA)
+            y += S(18)
             signals = ", ".join(moire.get("strong_signals", [])[:3])
             cv2.putText(panel, signals[:42], (S(14), y), FONT_SMALL, FS(0.32), C_ORANGE, 1, cv2.LINE_AA)
             y += S(18)
 
+        cv2.line(panel, (S(14), y), (panel_w - S(14), y), (60, 60, 65), 1)
         y += S(14)
-        if y > h - S(80):
-            break
 
     return np.hstack([frame, panel])
 
@@ -963,17 +1106,31 @@ def process_face(
     entry = {
         "bbox": bbox,
         "landmarks": face.landmarks,
+        "aligned": face.aligned_face,
         "name": name,
         "label": label,
         "extra": extra,
         "status": status,
         "color": color,
         "confidence": float(match.score),
+        "conf": float(match.score),
+        "det_conf": float(face.confidence),
         "matched": bool(match.matched),
         "match_score": float(match.score),
         "student_id": match.student_id if match.matched else "",
+        "sid": match.student_id if match.matched else "",
         "class_name": student.get("class_name", ""),
         "embedding_count": emb_count,
+        "emb_count": emb_count,
+        "emb_dim": int(len(face.embedding)) if face.embedding is not None else 0,
+        "quality": {
+            "passed": bool(metrics.get("passed", False)),
+            "blur": float(metrics.get("blur_score", 0.0)),
+            "bright": float(metrics.get("brightness", 0.0)),
+            "yaw": float(metrics.get("yaw_angle", 0.0)),
+            "size": int(metrics.get("face_size", 0)),
+            "reasons": metrics.get("reasons", []),
+        },
         "moire": moire,
         "rolling": rolling,
         "liveness": live,
@@ -1151,10 +1308,13 @@ def main():
                 display_fps,
                 len(last_results),
                 len(emb_counts),
+                show_landmarks,
+                show_info_panel,
+                show_moire_overlay,
                 cal_logger.enabled,
-                policy_views[policy_view_index],
+                debug_enabled,
             )
-            perf_text = f"Detect:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  FFT:128  Skip:{MOIRE_EVERY_N_DETECT - 1}/{MOIRE_EVERY_N_DETECT}"
+            perf_text = f"Det:{perf_detect_ms:.0f}ms  Moire:{perf_moire_ms:.0f}ms  FFT:128  Skip:{MOIRE_EVERY_N_DETECT - 1}/{MOIRE_EVERY_N_DETECT}  View:{policy_views[policy_view_index]}"
             cv2.putText(frame, perf_text, (S(14), S(78)), FONT_SMALL, FS(0.40), C_DIM, 1, cv2.LINE_AA)
 
             display_frame = (
