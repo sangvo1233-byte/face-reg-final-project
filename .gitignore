@@ -4,9 +4,6 @@ Computer Vision Share/
 # Pre-trained model files (too large for GitHub — download separately)
 models/
 
-# Dev scripts (local research only — not for production)
-dev/
-
 # Python
 __pycache__/
 *.py[cod]
