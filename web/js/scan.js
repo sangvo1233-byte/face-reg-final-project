@@ -9,6 +9,7 @@ const SUCCESS_COUNTDOWN_START = 3;
 const FAILURE_CARD_THROTTLE_MS = 1800;
 const LOCAL_WS_RECONNECT_MS = 1500;
 const BROWSER_WS_RECONNECT_MS = 1500;
+const DEBUG_OVERLAY_STORAGE_KEY = 'scanDebugOverlay';
 
 const browserCanvas = document.createElement('canvas');
 const browserCtx = browserCanvas.getContext('2d');
@@ -24,13 +25,22 @@ let browserFrameWidth = 960;
 let browserJpegQuality = 0.82;
 let browserTargetFps = 10;
 let latestBrowserFrameBlob = null;
+let latestBrowserFrameSize = null;
 let currentTransportMode = null;
 let successOverlayTimer = null;
 let successCountdownTimer = null;
+let successQueueTimer = null;
 let activeSuccessResult = null;
 let isShowingSuccessOverlay = false;
 let isClosingSuccessOverlay = false;
 let lastFailureCardAt = 0;
+let resultCardTimer = null;
+let challengeCountdownValue = null;
+let popupGeneration = 0;
+let debugOverlayInitialized = false;
+let debugOverlayEnabled = false;
+let latestDebugMessage = null;
+let debugDrawScheduled = false;
 
 function fallbackCapabilities() {
     return {
@@ -45,6 +55,7 @@ export async function initializeScanMode() {
     if (!SCAN_MODES.includes(state.scanModePreference)) {
         state.scanModePreference = 'auto';
     }
+    initializeDebugOverlay();
     await loadScanCapabilities(true);
     await syncScanModeUI();
 }
@@ -182,11 +193,13 @@ function applyPreviewMode(mode) {
         if (!feed.getAttribute('src')) feed.setAttribute('src', feed.dataset.src || '/api/live/stream');
         showElement(feed, 'block');
         hideElement(browserCam);
+        scheduleDebugDraw();
         return;
     }
 
     hideElement(feed);
     showElement(browserCam, 'block');
+    scheduleDebugDraw();
 }
 
 export function startAutoScan() {
@@ -198,6 +211,7 @@ export function stopAutoScan() {
     stopBrowserTransport();
     state.isAutoScanning = false;
     currentTransportMode = null;
+    resetScanPopups();
     updateAutoScanUI();
 }
 
@@ -208,6 +222,7 @@ export async function startLocalRunner() {
 export async function stopLocalRunner() {
     await stopLocalTransport(true);
     state.isAutoScanning = false;
+    resetScanPopups();
     updateAutoScanUI();
 }
 
@@ -346,6 +361,7 @@ function captureVideoFrame(video) {
     const height = Math.max(1, Math.round(video.videoHeight * scale));
     browserCanvas.width = width;
     browserCanvas.height = height;
+    latestBrowserFrameSize = { width, height };
     browserCtx.drawImage(video, 0, 0, width, height);
     return new Promise(resolve => browserCanvas.toBlob(resolve, 'image/jpeg', browserJpegQuality));
 }
@@ -362,6 +378,7 @@ function handleSocketMessage(event, sourceMode) {
 }
 
 function handleRuntimeMessage(message, sourceMode) {
+    captureDebugPayload(message, sourceMode);
     if (message.type === 'stream_ready') {
         if (sourceMode === 'browser_ws') {
             browserTargetFps = message.target_fps || browserTargetFps;
@@ -382,7 +399,7 @@ function handleRuntimeMessage(message, sourceMode) {
         return;
     }
     if (message.type === 'attendance') {
-        handleAttendanceEvent(message, sourceMode);
+        void handleAttendanceEvent(message, sourceMode);
         return;
     }
     if (message.type === 'challenge_required') {
@@ -409,6 +426,380 @@ function updateStreamStatus(message, sourceMode) {
         `${prefix}: ${message.message || message.status || 'Scanning...'}`;
 }
 
+function initializeDebugOverlay() {
+    if (debugOverlayInitialized) return;
+    debugOverlayInitialized = true;
+
+    const toggle = document.getElementById('scan-debug-toggle');
+    if (!toggle) return;
+
+    debugOverlayEnabled = localStorage.getItem(DEBUG_OVERLAY_STORAGE_KEY) === '1';
+    toggle.checked = debugOverlayEnabled;
+    toggle.addEventListener('change', () => setDebugOverlayEnabled(toggle.checked));
+    window.addEventListener('resize', scheduleDebugDraw);
+
+    ['browser-cam', 'camera-feed'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('loadedmetadata', scheduleDebugDraw);
+        el.addEventListener('load', scheduleDebugDraw);
+    });
+
+    setDebugOverlayEnabled(debugOverlayEnabled, false);
+}
+
+function setDebugOverlayEnabled(enabled, persist = true) {
+    debugOverlayEnabled = Boolean(enabled);
+    const viewfinder = document.querySelector('.viewfinder');
+    viewfinder?.classList.toggle('is-debug-overlay', debugOverlayEnabled);
+    if (persist) {
+        localStorage.setItem(DEBUG_OVERLAY_STORAGE_KEY, debugOverlayEnabled ? '1' : '0');
+    }
+    if (!debugOverlayEnabled) {
+        clearDebugOverlay();
+        return;
+    }
+    renderDebugPanel(latestDebugMessage);
+    scheduleDebugDraw();
+}
+
+function captureDebugPayload(message, sourceMode) {
+    if (!message || message.type === 'heartbeat' || message.type === 'stream_ready') return;
+    if (!hasDebugSignal(message)) return;
+
+    const clearGeometry = message.faces_detected === 0
+        || ['waiting_face', 'stopped', 'camera_error', 'no_session'].includes(message.status);
+    const hasGeometry = hasDebugGeometry(message);
+
+    if (!latestDebugMessage || clearGeometry || hasGeometry) {
+        latestDebugMessage = { ...message, sourceMode };
+    } else {
+        latestDebugMessage = mergeDebugStatus(message, sourceMode);
+    }
+
+    renderDebugPanel(latestDebugMessage);
+    scheduleDebugDraw();
+}
+
+function mergeDebugStatus(message, sourceMode) {
+    const previous = latestDebugMessage || {};
+    return {
+        ...previous,
+        ...message,
+        sourceMode,
+        frame_size: message.frame_size || previous.frame_size,
+        bbox: message.bbox || previous.bbox,
+        face_bbox: message.face_bbox || previous.face_bbox,
+        moire_roi_bbox: message.moire_roi_bbox || previous.moire_roi_bbox,
+        result: message.result || previous.result,
+        moire: hasObjectData(message.moire) ? message.moire : previous.moire,
+        moire_rolling: hasObjectData(message.moire_rolling) ? message.moire_rolling : previous.moire_rolling,
+        screen_context: hasObjectData(message.screen_context) ? message.screen_context : previous.screen_context,
+        phone_rect: hasObjectData(message.phone_rect) ? message.phone_rect : previous.phone_rect,
+        phone_rect_rolling: hasObjectData(message.phone_rect_rolling) ? message.phone_rect_rolling : previous.phone_rect_rolling,
+        passive_liveness: hasObjectData(message.passive_liveness) ? message.passive_liveness : previous.passive_liveness,
+        match: hasObjectData(message.match) ? message.match : previous.match,
+    };
+}
+
+function hasDebugSignal(message) {
+    return Boolean(
+        message.frame_size
+        || pickFaceBBox(message)
+        || message.moire_roi_bbox
+        || message.screen_context?.roi_bbox
+        || message.phone_rect?.roi_bbox
+        || message.phone_rect?.best_rect_points
+        || message.result?.bbox
+        || ['challenge_failed', 'stopped', 'camera_error', 'no_session'].includes(message.status)
+    );
+}
+
+function hasDebugGeometry(message) {
+    return Boolean(
+        normalizeBbox(pickFaceBBox(message))
+        || normalizeBbox(message.moire_roi_bbox)
+        || normalizeBbox(message.screen_context?.roi_bbox)
+        || normalizeBbox(message.phone_rect?.roi_bbox)
+        || normalizePoints(message.phone_rect?.best_rect_points).length >= 3
+    );
+}
+
+function hasObjectData(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
+function scheduleDebugDraw() {
+    if (!debugOverlayEnabled) {
+        clearDebugOverlay();
+        return;
+    }
+    if (debugDrawScheduled) return;
+    debugDrawScheduled = true;
+    requestAnimationFrame(drawDebugOverlay);
+}
+
+function drawDebugOverlay() {
+    debugDrawScheduled = false;
+    const canvas = document.getElementById('scan-debug-overlay');
+    const viewfinder = document.querySelector('.viewfinder');
+    if (!canvas || !viewfinder) return;
+
+    const canvasState = prepareDebugCanvas(canvas, viewfinder);
+    if (!canvasState) return;
+    const { ctx, width, height } = canvasState;
+    ctx.clearRect(0, 0, width, height);
+
+    if (!debugOverlayEnabled || !latestDebugMessage || state.demoPlaying) return;
+
+    const sourceSize = getDebugSourceSize(latestDebugMessage);
+    if (!sourceSize) return;
+
+    const media = getDebugMedia(latestDebugMessage.sourceMode);
+    const mapper = createDebugMapper(sourceSize, width, height, shouldMirrorDebugMedia(media));
+    const faceBbox = normalizeBbox(pickFaceBBox(latestDebugMessage));
+    const moireBbox = normalizeBbox(latestDebugMessage.moire_roi_bbox);
+    const screenBbox = normalizeBbox(latestDebugMessage.screen_context?.roi_bbox);
+    const phoneBbox = normalizeBbox(latestDebugMessage.phone_rect?.roi_bbox);
+    const phonePoints = normalizePoints(latestDebugMessage.phone_rect?.best_rect_points);
+
+    if (moireBbox) drawDebugRect(ctx, mapper, moireBbox, '#a78bfa', 'MOIRE ROI');
+    if (screenBbox) drawDebugRect(ctx, mapper, screenBbox, '#38bdf8', metricLabel('SCREEN', latestDebugMessage.screen_context));
+    if (phoneBbox) drawDebugRect(ctx, mapper, phoneBbox, '#fb923c', 'PHONE ROI');
+    if (phonePoints.length >= 3) drawDebugPolygon(ctx, mapper, phonePoints, '#f43f5e', metricLabel('PHONE', latestDebugMessage.phone_rect));
+    if (faceBbox) drawDebugRect(ctx, mapper, faceBbox, statusColor(latestDebugMessage.status), 'FACE');
+}
+
+function prepareDebugCanvas(canvas, viewfinder) {
+    const rect = viewfinder.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const targetWidth = Math.round(width * dpr);
+    const targetHeight = Math.round(height * dpr);
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    return { ctx, width, height };
+}
+
+function createDebugMapper(sourceSize, viewWidth, viewHeight, mirrorX) {
+    const sourceWidth = Math.max(1, Number(sourceSize.width) || 1);
+    const sourceHeight = Math.max(1, Number(sourceSize.height) || 1);
+    const scale = Math.max(viewWidth / sourceWidth, viewHeight / sourceHeight);
+    const renderedWidth = sourceWidth * scale;
+    const renderedHeight = sourceHeight * scale;
+    const offsetX = (viewWidth - renderedWidth) / 2;
+    const offsetY = (viewHeight - renderedHeight) / 2;
+
+    return {
+        point(x, y) {
+            const rawX = Number(x) * scale + offsetX;
+            const mappedX = mirrorX ? viewWidth - rawX : rawX;
+            return {
+                x: mappedX,
+                y: Number(y) * scale + offsetY,
+            };
+        },
+    };
+}
+
+function drawDebugRect(ctx, mapper, bbox, color, label) {
+    const p1 = mapper.point(bbox[0], bbox[1]);
+    const p2 = mapper.point(bbox[2], bbox[3]);
+    const x = Math.min(p1.x, p2.x);
+    const y = Math.min(p1.y, p2.y);
+    const width = Math.abs(p2.x - p1.x);
+    const height = Math.abs(p2.y - p1.y);
+    if (width < 2 || height < 2) return;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, width, height);
+    drawDebugLabel(ctx, x, y, label, color);
+    ctx.restore();
+}
+
+function drawDebugPolygon(ctx, mapper, points, color, label) {
+    const mapped = points.map(point => mapper.point(point[0], point[1]));
+    if (mapped.length < 3) return;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(mapped[0].x, mapped[0].y);
+    mapped.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
+    ctx.closePath();
+    ctx.stroke();
+    const top = mapped.reduce((best, point) => point.y < best.y ? point : best, mapped[0]);
+    drawDebugLabel(ctx, top.x, top.y, label, color);
+    ctx.restore();
+}
+
+function drawDebugLabel(ctx, x, y, label, color) {
+    if (!label) return;
+    const text = String(label).slice(0, 28);
+    ctx.font = '700 11px system-ui, sans-serif';
+    const metrics = ctx.measureText(text);
+    const boxWidth = metrics.width + 10;
+    const boxHeight = 18;
+    const canvasWidth = ctx.canvas.getBoundingClientRect().width || ctx.canvas.width;
+    const labelX = Math.max(4, Math.min(x, canvasWidth - boxWidth - 4));
+    const labelY = Math.max(4, y - boxHeight - 4);
+    ctx.fillStyle = 'rgba(7, 12, 18, 0.78)';
+    ctx.fillRect(labelX, labelY, boxWidth, boxHeight);
+    ctx.fillStyle = color;
+    ctx.fillText(text, labelX + 5, labelY + 13);
+}
+
+function renderDebugPanel(message) {
+    const panel = document.getElementById('scan-debug-panel');
+    if (!panel || !debugOverlayEnabled) return;
+    if (!message) {
+        panel.innerHTML = `
+            <p class="scan-debug-title">Detect V4.4 Overlay</p>
+            <p class="scan-debug-status">Waiting for backend diagnostics...</p>
+        `;
+        return;
+    }
+
+    const metrics = [
+        ['Status', message.status || message.type || '--'],
+        ['Match', formatPercent(message.match?.confidence ?? message.confidence)],
+        ['Moire', formatDecisionMetric(message.moire, 'moire_score')],
+        ['Screen', formatDecisionMetric(message.screen_context, 'score')],
+        ['Phone', formatDecisionMetric(message.phone_rect, 'score')],
+        ['Rolling', formatRolling(message.phone_rect_rolling)],
+    ];
+    const status = message.message || message.spoof_reason || message.result?.message || 'Scanning';
+    panel.innerHTML = `
+        <p class="scan-debug-title">Detect V4.4 Overlay</p>
+        <div class="scan-debug-grid">
+            ${metrics.map(([key, value]) => `
+                <div class="scan-debug-metric">
+                    <span class="scan-debug-key">${escapeHtml(key)}</span>
+                    <span class="scan-debug-value">${escapeHtml(value)}</span>
+                </div>
+            `).join('')}
+        </div>
+        <p class="scan-debug-status">${escapeHtml(status)}</p>
+    `;
+}
+
+function clearDebugOverlay() {
+    const canvas = document.getElementById('scan-debug-overlay');
+    const panel = document.getElementById('scan-debug-panel');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+    }
+    if (panel) panel.innerHTML = '';
+}
+
+function getDebugSourceSize(message) {
+    const frameSize = message?.frame_size || message?.result?.frame_size;
+    if (isValidFrameSize(frameSize)) return frameSize;
+    if (message?.sourceMode === 'browser_ws' && isValidFrameSize(latestBrowserFrameSize)) return latestBrowserFrameSize;
+
+    const media = getDebugMedia(message?.sourceMode);
+    if (media?.videoWidth && media?.videoHeight) {
+        return { width: media.videoWidth, height: media.videoHeight };
+    }
+    if (media?.naturalWidth && media?.naturalHeight) {
+        return { width: media.naturalWidth, height: media.naturalHeight };
+    }
+    return null;
+}
+
+function isValidFrameSize(frameSize) {
+    return frameSize && Number(frameSize.width) > 0 && Number(frameSize.height) > 0;
+}
+
+function getDebugMedia(sourceMode) {
+    if (sourceMode === 'local_direct') return document.getElementById('camera-feed');
+    if (sourceMode === 'browser_ws') return document.getElementById('browser-cam');
+    return currentTransportMode === 'local_direct'
+        ? document.getElementById('camera-feed')
+        : document.getElementById('browser-cam');
+}
+
+function shouldMirrorDebugMedia(media) {
+    if (!media) return false;
+    const transform = getComputedStyle(media).transform;
+    return Boolean(transform && transform !== 'none' && transform.includes('-1'));
+}
+
+function pickFaceBBox(message) {
+    return message?.face_bbox || message?.bbox || message?.result?.bbox || null;
+}
+
+function normalizeBbox(value) {
+    if (!Array.isArray(value) || value.length < 4) return null;
+    const bbox = value.slice(0, 4).map(Number);
+    if (bbox.some(v => !Number.isFinite(v))) return null;
+    if (Math.abs(bbox[2] - bbox[0]) < 1 || Math.abs(bbox[3] - bbox[1]) < 1) return null;
+    return bbox;
+}
+
+function normalizePoints(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .filter(point => Array.isArray(point) && point.length >= 2)
+        .map(point => [Number(point[0]), Number(point[1])])
+        .filter(point => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+}
+
+function statusColor(status = '') {
+    if (['present', 'already', 'live'].includes(status)) return '#34d399';
+    if (['spoof', 'challenge_failed'].includes(status)) return '#fb7185';
+    if (String(status).startsWith('challenge')) return '#fbbf24';
+    return '#22d3ee';
+}
+
+function metricLabel(prefix, metric) {
+    if (!metric) return prefix;
+    const score = typeof metric.score === 'number' ? ` ${(metric.score * 100).toFixed(0)}%` : '';
+    const decision = metric.decision ? ` ${metric.decision}` : '';
+    return `${prefix}${score}${decision}`.trim();
+}
+
+function formatDecisionMetric(metric, scoreKey) {
+    if (!metric || typeof metric !== 'object') return '--';
+    const score = typeof metric[scoreKey] === 'number' ? `${Math.round(metric[scoreKey] * 100)}%` : '--';
+    return `${score} ${metric.decision || metric.decision_hint || ''}`.trim();
+}
+
+function formatRolling(rolling) {
+    if (!rolling || typeof rolling !== 'object') return '--';
+    const decision = rolling.decision || '--';
+    const count = rolling.strong_count ?? rolling.suspicious_count ?? rolling.samples;
+    return count == null ? decision : `${decision} ${count}`;
+}
+
+function formatPercent(value) {
+    return typeof value === 'number' ? `${Math.round(value * 100)}%` : '--';
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+}
+
 function handleChallengeRequired(message) {
     if (!message.challenge) return;
     state.isChallengeRunning = true;
@@ -433,18 +824,29 @@ function handleChallengeFailed(message) {
     void hideScanChallengeOverlay();
     state.isChallengeRunning = false;
     state.activeChallenge = null;
+    const status = document.getElementById('autoscan-status');
+    if (status) status.textContent = message.message || 'Challenge failed';
     showResultCard('Challenge Failed', 'Challenge Failed', false, message.message || 'Verification failed');
 }
 
-function handleAttendanceEvent(result, sourceMode) {
-    if (result.challenge_passed) {
-        void hideScanChallengeOverlay();
-        state.isChallengeRunning = false;
-        state.activeChallenge = null;
-    }
+async function handleAttendanceEvent(result, sourceMode) {
     if (sourceMode === 'browser_ws' && latestBrowserFrameBlob) {
         result.local_preview_url = URL.createObjectURL(latestBrowserFrameBlob);
     }
+
+    if (result.challenge_passed) {
+        state.isChallengeRunning = false;
+        state.activeChallenge = null;
+        await hideScanChallengeOverlay();
+        if (!state.sessionActive && !state.isAutoScanning) {
+            revokePreviewUrl(result);
+            return;
+        }
+    }
+    finalizeAttendanceEvent(result);
+}
+
+function finalizeAttendanceEvent(result) {
     const isMatch = result.status === 'present' || result.status === 'already';
     const alreadySeen = !!(result.student_id && state.presentSet.has(result.student_id));
     if (isMatch && result.student_id && !alreadySeen) {
@@ -471,6 +873,7 @@ function handleAttendanceEvent(result, sourceMode) {
 }
 
 async function showScanChallengeOverlay(result) {
+    const generation = popupGeneration;
     const overlay = document.getElementById('scan-challenge-overlay');
     const viewfinder = document.querySelector('.viewfinder');
     if (!overlay) return;
@@ -480,12 +883,13 @@ async function showScanChallengeOverlay(result) {
     document.getElementById('scan-challenge-status').textContent =
         result.message || 'Additional verification required';
     updateChallengeAction(result.challenge.type);
-    updateChallengeCountdown(Math.max(1, Math.ceil((result.challenge.remaining_ms || 6000) / 1000)));
+    updateChallengeCountdown(Math.max(1, Math.ceil((result.challenge.remaining_ms || 6000) / 1000)), true);
     updateChallengeProgress(0, 0);
     overlay.classList.remove('is-visible');
     showElement(overlay, 'flex');
     viewfinder?.classList.add('is-challenging');
     await nextFrame();
+    if (generation !== popupGeneration) return;
     overlay.classList.add('is-visible');
 }
 
@@ -495,14 +899,19 @@ async function hideScanChallengeOverlay() {
     if (!overlay) return;
     overlay.classList.remove('is-visible');
     await delay(180);
+    if (overlay.classList.contains('is-visible')) return;
     hideElement(overlay);
+    challengeCountdownValue = null;
     viewfinder?.classList.remove('is-challenging');
 }
 
-function updateChallengeCountdown(value) {
+function updateChallengeCountdown(value, force = false) {
     const el = document.getElementById('scan-challenge-countdown');
     if (!el) return;
-    el.textContent = String(value);
+    const normalized = Math.max(1, Number(value) || 1);
+    if (!force && challengeCountdownValue === normalized) return;
+    challengeCountdownValue = normalized;
+    el.textContent = String(normalized);
     el.classList.remove('is-ticking');
     void el.offsetWidth;
     el.classList.add('is-ticking');
@@ -550,6 +959,8 @@ function enqueueAttendanceSuccess(result) {
 
 async function showNextAttendanceSuccess() {
     if (isClosingSuccessOverlay) return;
+    const generation = popupGeneration;
+    successQueueTimer = null;
     const result = successOverlayQueue.shift();
     if (!result) {
         isShowingSuccessOverlay = false;
@@ -560,6 +971,7 @@ async function showNextAttendanceSuccess() {
     activeSuccessResult = result;
     renderAttendanceSuccess(result);
     await showAttendanceSuccessOverlay();
+    if (generation !== popupGeneration) return;
     startSuccessCountdown();
     successOverlayTimer = setTimeout(() => void closeCurrentAttendanceSuccess(), SUCCESS_OVERLAY_DISPLAY_MS);
 }
@@ -599,6 +1011,7 @@ function renderAttendanceSuccess(result) {
 }
 
 async function showAttendanceSuccessOverlay() {
+    const generation = popupGeneration;
     const overlay = document.getElementById('attendance-success-overlay');
     const viewfinder = document.querySelector('.viewfinder');
     if (!overlay) return;
@@ -606,6 +1019,7 @@ async function showAttendanceSuccessOverlay() {
     showElement(overlay, 'flex');
     viewfinder?.classList.add('is-confirming');
     await nextFrame();
+    if (generation !== popupGeneration) return;
     overlay.classList.add('is-visible');
 }
 
@@ -623,13 +1037,15 @@ async function hideAttendanceSuccessOverlay() {
 
 async function closeCurrentAttendanceSuccess() {
     if (isClosingSuccessOverlay) return;
+    const generation = popupGeneration;
     isClosingSuccessOverlay = true;
     clearSuccessTimers();
     await hideAttendanceSuccessOverlay();
+    if (generation !== popupGeneration) return;
     revokePreviewUrl(activeSuccessResult);
     activeSuccessResult = null;
     isClosingSuccessOverlay = false;
-    setTimeout(() => void showNextAttendanceSuccess(), 120);
+    successQueueTimer = setTimeout(() => void showNextAttendanceSuccess(), 120);
 }
 
 function startSuccessCountdown() {
@@ -641,6 +1057,7 @@ function startSuccessCountdown() {
         if (remaining < 1) {
             clearInterval(successCountdownTimer);
             successCountdownTimer = null;
+            void closeCurrentAttendanceSuccess();
             return;
         }
         updateSuccessCountdown(remaining);
@@ -659,8 +1076,43 @@ function updateSuccessCountdown(value) {
 function clearSuccessTimers() {
     if (successOverlayTimer) clearTimeout(successOverlayTimer);
     if (successCountdownTimer) clearInterval(successCountdownTimer);
+    if (successQueueTimer) clearTimeout(successQueueTimer);
     successOverlayTimer = null;
     successCountdownTimer = null;
+    successQueueTimer = null;
+}
+
+function resetScanPopups() {
+    popupGeneration += 1;
+    successOverlayQueue.length = 0;
+    clearSuccessTimers();
+    revokePreviewUrl(activeSuccessResult);
+    activeSuccessResult = null;
+    isShowingSuccessOverlay = false;
+    isClosingSuccessOverlay = false;
+    state.isChallengeRunning = false;
+    state.activeChallenge = null;
+    challengeCountdownValue = null;
+
+    const viewfinder = document.querySelector('.viewfinder');
+    viewfinder?.classList.remove('is-confirming', 'is-challenging');
+
+    const successOverlay = document.getElementById('attendance-success-overlay');
+    if (successOverlay) {
+        successOverlay.classList.remove('is-visible', 'is-leaving');
+        hideElement(successOverlay);
+    }
+
+    const challengeOverlay = document.getElementById('scan-challenge-overlay');
+    if (challengeOverlay) {
+        challengeOverlay.classList.remove('is-visible');
+        hideElement(challengeOverlay);
+    }
+
+    const resultCard = document.getElementById('result-card');
+    if (resultCardTimer) clearTimeout(resultCardTimer);
+    resultCardTimer = null;
+    if (resultCard) hideElement(resultCard);
 }
 
 function revokePreviewUrl(result) {
@@ -688,13 +1140,17 @@ function buildScanFailureMessage(result) {
 function showResultCard(id, name, success, desc) {
     const card = document.getElementById('result-card');
     const icon = document.getElementById('result-icon');
+    if (resultCardTimer) clearTimeout(resultCardTimer);
     card.className = success ? 'scan-result-card success' : 'scan-result-card error';
     showElement(card, 'flex');
     icon.textContent = success ? 'check_circle' : 'cancel';
     setTone(icon, success ? 'primary' : 'error');
     document.getElementById('result-name').textContent = name;
     document.getElementById('result-msg').textContent = desc;
-    setTimeout(() => hideElement(card), 4000);
+    resultCardTimer = setTimeout(() => {
+        hideElement(card);
+        resultCardTimer = null;
+    }, 4000);
 }
 
 export function updateScanLogs() {
@@ -766,11 +1222,13 @@ export function toggleDemoVideo() {
         if (state.effectiveScanMode === 'local_direct') showElement(feed, 'block');
         else showElement(browserCam, 'block');
         state.demoPlaying = false;
+        scheduleDebugDraw();
     } else {
         hideElement(feed);
         hideElement(browserCam);
         showElement(video, 'block');
         video.play();
         state.demoPlaying = true;
+        scheduleDebugDraw();
     }
 }

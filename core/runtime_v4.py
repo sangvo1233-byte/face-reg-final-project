@@ -148,16 +148,22 @@ class DetectV4RuntimeSession:
     def process_frame(self, frame: np.ndarray) -> list[dict[str, Any]]:
         now = time.time()
         self.frame_timestamps.append(now)
+        frame_size = self._frame_size(frame)
         live_summary = self.liveness.process_frame(frame)
 
         if self.active_challenge is not None:
             return self._process_challenge_frame(frame, live_summary, now)
 
         if now < self.detect_paused_until:
-            return [self._state_event(live_summary, status="cooldown", message="Attendance recorded. Continue scanning...")]
+            return [self._state_event(
+                live_summary,
+                status="cooldown",
+                message="Attendance recorded. Continue scanning...",
+                frame_size=frame_size,
+            )]
 
         if now - self.last_detect_at < self.detect_interval:
-            return [self._state_event(live_summary)]
+            return [self._state_event(live_summary, frame_size=frame_size)]
 
         return self._detect_cycle(frame, live_summary, now)
 
@@ -171,7 +177,13 @@ class DetectV4RuntimeSession:
         if not faces:
             active_track_ids = self.moire_tracks.finish_cycle()
             self._drop_inactive_tracks(active_track_ids)
-            return [self._state_event(live, status="waiting_face", message="Move your face into the frame", faces_detected=0)]
+            return [self._state_event(
+                live,
+                status="waiting_face",
+                message="Move your face into the frame",
+                faces_detected=0,
+                frame_size=self._frame_size(frame),
+            )]
 
         events = []
         try:
@@ -185,7 +197,13 @@ class DetectV4RuntimeSession:
             active_track_ids = self.moire_tracks.finish_cycle()
             self._drop_inactive_tracks(active_track_ids)
 
-        return events or [self._state_event(live, status="unknown", message="No usable face embedding", faces_detected=len(faces))]
+        return events or [self._state_event(
+            live,
+            status="unknown",
+            message="No usable face embedding",
+            faces_detected=len(faces),
+            frame_size=self._frame_size(frame),
+        )]
 
     def _process_face(
         self,
@@ -209,6 +227,9 @@ class DetectV4RuntimeSession:
 
         moire_decision = moire.get("decision_hint", rolling.get("decision", "clean"))
         diagnostics = self._diagnostics(
+            frame_size=self._frame_size(frame),
+            face_bbox=bbox,
+            moire_roi_bbox=moire_roi_bbox,
             faces_detected=faces_detected,
             face_live=face_live,
             moire=moire,
@@ -362,22 +383,29 @@ class DetectV4RuntimeSession:
         challenge.frames_processed += 1
         faces = self.engine.detect(frame)
         if not faces:
-            return [self._challenge_progress_event("No face detected")]
+            return [self._challenge_progress_event("No face detected", frame_size=self._frame_size(frame))]
 
         valid_faces = [f for f in faces if f.embedding is not None and len(f.embedding) > 0]
         if not valid_faces:
-            return [self._challenge_progress_event("No usable face embedding")]
+            return [self._challenge_progress_event(
+                "No usable face embedding",
+                frame_size=self._frame_size(frame),
+            )]
 
         face = max(valid_faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        bbox = bbox_list(face.bbox)
         match = self.engine.match_with_threshold(face.embedding, V4_COSINE_THRESHOLD)
         if not (match.matched and match.student_id == challenge.candidate.get("student_id")):
-            return [self._challenge_progress_event("Identity mismatch")]
+            return [self._challenge_progress_event(
+                "Identity mismatch",
+                frame_size=self._frame_size(frame),
+                face_bbox=bbox,
+            )]
         challenge.identity_frames += 1
 
-        bbox = bbox_list(face.bbox)
         self.moire_tracks.begin_cycle()
         try:
-            moire, rolling, _ = self._moire_for_face(frame, bbox, True)
+            moire, rolling, moire_roi_bbox = self._moire_for_face(frame, bbox, True)
         finally:
             active_track_ids = self.moire_tracks.finish_cycle()
             self._drop_inactive_tracks(active_track_ids)
@@ -396,7 +424,18 @@ class DetectV4RuntimeSession:
 
         if completed:
             return self._end_challenge_pass(frame, match, face, now, moire, face_live)
-        return [self._challenge_progress_event(f"Keep going: {challenge.label}")]
+        return [self._challenge_progress_event(
+            f"Keep going: {challenge.label}",
+            frame_size=self._frame_size(frame),
+            face_bbox=bbox,
+            liveness=face_live,
+            moire={
+                **moire,
+                "decision": rolling.get("decision", moire.get("decision_hint", "")),
+            },
+            moire_rolling=rolling,
+            moire_roi_bbox=moire_roi_bbox,
+        )]
 
     def _moire_for_face(
         self,
@@ -496,6 +535,8 @@ class DetectV4RuntimeSession:
             "status": result.get("status", "present"),
             "message": result.get("message", "Attendance recorded"),
             "challenge_passed": True,
+            "frame_size": self._frame_size(frame),
+            "face_bbox": bbox,
             "fps": self._fps(),
             **result,
         }]
@@ -515,7 +556,7 @@ class DetectV4RuntimeSession:
             "fps": self._fps(),
         }]
 
-    def _challenge_progress_event(self, feedback: str) -> dict[str, Any]:
+    def _challenge_progress_event(self, feedback: str, **extra) -> dict[str, Any]:
         challenge = self.active_challenge
         return {
             "type": "scan_state",
@@ -524,6 +565,8 @@ class DetectV4RuntimeSession:
             "challenge": challenge.to_dict() if challenge else {},
             "challenge_progress": self._challenge_progress_payload(challenge, "collecting", feedback) if challenge else {},
             "fps": self._fps(),
+            "scan_version": DETECT_VERSION,
+            **extra,
         }
 
     def _challenge_progress_payload(
@@ -554,6 +597,9 @@ class DetectV4RuntimeSession:
     def _diagnostics(
         self,
         *,
+        frame_size: dict[str, int],
+        face_bbox: list[int],
+        moire_roi_bbox: list[int],
         faces_detected: int,
         face_live: dict[str, Any],
         moire: dict[str, Any],
@@ -566,6 +612,9 @@ class DetectV4RuntimeSession:
         match: Any,
     ) -> dict[str, Any]:
         return {
+            "frame_size": frame_size,
+            "face_bbox": face_bbox,
+            "moire_roi_bbox": moire_roi_bbox,
             "faces_detected": faces_detected,
             "liveness": face_live,
             "moire": {
@@ -631,6 +680,11 @@ class DetectV4RuntimeSession:
             "fps": self._fps(),
             **extra,
         }
+
+    @staticmethod
+    def _frame_size(frame: np.ndarray) -> dict[str, int]:
+        height, width = frame.shape[:2]
+        return {"width": int(width), "height": int(height)}
 
     def _drop_inactive_tracks(self, active_track_ids: set[int]):
         for track_id in list(self.rolling_by_face.keys()):

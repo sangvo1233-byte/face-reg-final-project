@@ -117,12 +117,25 @@
                         <button class="btn-secondary btn-compact" onclick="testAttendanceSuccessOverlay('already')">Test
                             Already</button>
                     </div>
+                    <div class="tech-overlay-bar">
+                        <div>
+                            <span class="tech-overlay-label">Tech overlay</span>
+                            <span class="tech-overlay-note">Bounding boxes and V4.4 metrics</span>
+                        </div>
+                        <label class="tech-overlay-switch" for="scan-debug-toggle">
+                            <input id="scan-debug-toggle" type="checkbox" aria-label="Toggle Detect V4.4 overlay">
+                            <span class="tech-overlay-track">
+                                <span class="tech-overlay-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
 
                     <div class="viewfinder">
                         <img id="camera-feed" data-src="/api/live/stream" alt="Camera" crossorigin="anonymous"
                             class="is-hidden">
                         <video id="browser-cam" class="browser-cam-video" autoplay playsinline muted></video>
                         <video id="demo-video" class="demo-video" src="/static/demo.mp4" loop muted playsinline></video>
+                        <canvas id="scan-debug-overlay" class="scan-debug-overlay" aria-hidden="true"></canvas>
                         <div class="viewfinder-brackets"></div>
                         <div class="viewfinder-hud">
                             <div class="hud-row">
@@ -135,6 +148,7 @@
                                 </div>
                             </div>
                         </div>
+                        <div id="scan-debug-panel" class="scan-debug-panel" aria-live="polite"></div>
                         <div class="attendance-success-overlay hidden-initial" id="attendance-success-overlay"
                             aria-live="polite">
                             <div class="attendance-success-backdrop"></div>
@@ -342,7 +356,7 @@
                                 <button class="view-tab" type="button" data-scan-mode="local_direct" onclick="setScanMode('local_direct')">Local Direct</button>
                                 <button class="view-tab" type="button" data-scan-mode="browser_ws" onclick="setScanMode('browser_ws')">Browser Stream</button>
                             </div>
-                            <p class="scan-mode-note" id="scan-mode-note">Choose how Detect V3 receives frames on this dashboard.</p>
+                            <p class="scan-mode-note" id="scan-mode-note">Choose how Detect V4.4 receives frames on this dashboard.</p>
                         </div>
                         <div class="source-info" id="source-info-card">
                             <div class="source-info-row">

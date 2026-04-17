@@ -70,6 +70,35 @@ def test_collect_suspicious_reasons():
     assert "recent challenge failures" in reasons
 
 
+def test_runtime_diagnostics_expose_overlay_geometry():
+    from core.runtime_v4 import DetectV4RuntimeSession
+
+    runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
+    passive = MagicMock(score=0.81, reason="ok")
+    match = MagicMock(matched=True, score=0.88, student_id="HS001", name="Sample")
+
+    diagnostics = runtime._diagnostics(
+        frame_size={"width": 960, "height": 540},
+        face_bbox=[100, 80, 220, 240],
+        moire_roi_bbox=[70, 40, 250, 280],
+        faces_detected=1,
+        face_live={"state": "live"},
+        moire={"moire_score": 0.73, "decision_hint": "clean"},
+        rolling={"decision": "clean"},
+        screen_context={"score": 0.12, "decision": "clean", "roi_bbox": [70, 40, 250, 280]},
+        phone_rect={"score": 0.44, "decision": "suspicious", "roi_bbox": [20, 10, 320, 400]},
+        phone_rect_rolling={"decision": "suspicious", "strong_count": 1},
+        passive=passive,
+        passive_status="pass",
+        match=match,
+    )
+
+    assert diagnostics["frame_size"] == {"width": 960, "height": 540}
+    assert diagnostics["face_bbox"] == [100, 80, 220, 240]
+    assert diagnostics["moire_roi_bbox"] == [70, 40, 250, 280]
+    assert diagnostics["phone_rect"]["roi_bbox"] == [20, 10, 320, 400]
+
+
 def test_system_capabilities_include_v4():
     from app.routes.system import system_capabilities
 
