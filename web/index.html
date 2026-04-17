@@ -65,9 +65,22 @@
         <!-- ═══ TAB: DASHBOARD ═══ -->
         <section class="tab-content active" id="tab-attendance">
             <div class="flex-row justify-between mb-4">
-                <div class="flex-row" id="session-info">
-                    <span class="dot off"></span>
-                    <span class="session-text">No active session</span>
+                <div class="flex-row gap-lg">
+                    <div class="flex-row" id="session-info" style="min-width: 140px;">
+                        <span class="dot off"></span>
+                        <span class="session-text">No active session</span>
+                    </div>
+                    <div class="flex-row gap-sm" style="border: 1px solid var(--outline-variant); border-radius: var(--radius-md); padding: 4px 12px; background: var(--surface-container-low);">
+                        <span style="font-size: 0.75rem; font-weight: 600; color: var(--on-surface-variant); margin-right: 4px;">Tech Overlay</span>
+                        <label class="tech-overlay-switch" for="scan-debug-toggle" style="margin-right: 8px;">
+                            <input id="scan-debug-toggle" type="checkbox" aria-label="Toggle Detect V4.4 overlay">
+                            <span class="tech-overlay-track">
+                                <span class="tech-overlay-thumb"></span>
+                            </span>
+                        </label>
+                        <button class="btn-secondary" style="padding: 2px 8px; font-size: 0.7rem;" onclick="testAttendanceSuccessOverlay('present')">Test Present</button>
+                        <button class="btn-secondary" style="padding: 2px 8px; font-size: 0.7rem;" onclick="testAttendanceSuccessOverlay('already')">Test Already</button>
+                    </div>
                 </div>
                 <div class="flex-row">
                     <input type="text" id="session-name" placeholder="Session name..." class="form-input session-input">
@@ -110,25 +123,7 @@
                         <span class="autoscan-status-text" id="autoscan-status">Waiting...</span>
                         <span class="autoscan-count-text" id="autoscan-count">0 scanned</span>
                     </div>
-                    <div class="popup-test-bar">
-                        <span class="popup-test-label">Popup test</span>
-                        <button class="btn-secondary btn-compact" onclick="testAttendanceSuccessOverlay('present')">Test
-                            Present</button>
-                        <button class="btn-secondary btn-compact" onclick="testAttendanceSuccessOverlay('already')">Test
-                            Already</button>
-                    </div>
-                    <div class="tech-overlay-bar">
-                        <div>
-                            <span class="tech-overlay-label">Tech overlay</span>
-                            <span class="tech-overlay-note">Bounding boxes and V4.4 metrics</span>
-                        </div>
-                        <label class="tech-overlay-switch" for="scan-debug-toggle">
-                            <input id="scan-debug-toggle" type="checkbox" aria-label="Toggle Detect V4.4 overlay">
-                            <span class="tech-overlay-track">
-                                <span class="tech-overlay-thumb"></span>
-                            </span>
-                        </label>
-                    </div>
+                    <!-- Tech overlay and popup test moved to top bar -->
 
                     <div class="viewfinder">
                         <img id="camera-feed" data-src="/api/live/stream" alt="Camera" crossorigin="anonymous"
