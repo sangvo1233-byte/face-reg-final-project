@@ -47,16 +47,80 @@ from core.face_engine import get_engine
 from core.liveness import StreamingLivenessTracker
 
 
+# =========================
+# V4 TUNING ZONE - CHINH NHUNG THAM SO CHINH
+# =========================
+
+V4_COSINE_THRESHOLD = 0.52
+# Nguong nhan dien khuon mat.
+# Tang: kho nhan nham hon nhung de Unknown hon.
+# Giam: de nhan dung hon nhung tang rui ro nhan nham.
+
+MOIRE_CONTEXT_SCALE = 1.65
+# Do no vung phan tich quanh mat.
+# Tang: lay them vien dien thoai/glare/nen man hinh, tot hon cho bat replay.
+# Giam: tap trung vao mat hon, it nhieu nen hon.
+
+MOIRE_EVERY_N_DETECT = 3
+# Bao nhieu lan detect mat thi chay moire mot lan.
+# Giam ve 1: nhay hon, phan ung nhanh hon, nhung ton CPU hon.
+# Tang: nhe may hon nhung de bo lo artifact ngan.
+
+MOIRE_HIGH_BAND_WEIGHT = 0.90
+# Do nhay voi vung tan so cao, quan trong voi OLED/Retina.
+# Tang: de nghi video dien thoai hon.
+# Giam: it false positive hon voi webcam/noise.
+
+MOIRE_FRAME_SUSPICIOUS_EVIDENCE = 0.38
+# Nguong de mot frame bi xem la SUSPECT.
+# Giam: video OLED de bi challenge hon.
+# Tang: nguoi that it bi challenge hon.
+
+MOIRE_FRAME_BLOCK_EVIDENCE = 0.68
+# Nguong de mot frame bi xem la SCREEN/BLOCK.
+# Giam: chan man hinh manh hon nhung de chan nham.
+# Tang: it chan nham hon nhung replay de lot hon.
+
+MOIRE_ROLLING_SUSPICIOUS_P10_MAX = 0.38
+# Nguong p10 tren nhieu frame de chuyen sang SUSPECT.
+# Tang: chi can vai frame hoi xau cung bi challenge.
+# Giam: can tin hieu man hinh ro hon moi challenge.
+
+MOIRE_ROLLING_CLEAN_MEAN_MIN = 0.55
+# Mean score toi thieu de tin la sach.
+# Tang: kho duoc xem la clean, bao mat hon.
+# Giam: de pass hon, it phien nguoi that hon.
+
+CHALLENGE_COOLDOWN = 12.0
+# Sau khi pass challenge, bo qua challenge trong N giay.
+# Giam xuong 0-2 khi test replay de khong bi lan pass truoc che loi moi.
+# Tang giup user that do bi hoi challenge lien tuc.
+
+# GOI Y CHINH NHANH:
+# 1. Video OLED van pass:
+#    - Giam MOIRE_FRAME_SUSPICIOUS_EVIDENCE tu 0.38 xuong 0.30.
+#    - Neu van pass, tang MOIRE_ROLLING_SUSPICIOUS_P10_MAX tu 0.38 len 0.48.
+#
+# 2. Nguoi that bi challenge qua nhieu:
+#    - Tang MOIRE_FRAME_SUSPICIOUS_EVIDENCE len 0.42-0.48.
+#    - Giam MOIRE_ROLLING_SUSPICIOUS_P10_MAX xuong 0.35.
+#
+# 3. Muon bat vien/glare dien thoai ro hon:
+#    - Tang MOIRE_CONTEXT_SCALE tu 1.65 len 2.0 hoac 2.2.
+#
+# 4. Khi test replay lien tuc:
+#    - Giam CHALLENGE_COOLDOWN xuong 0 hoac 2 de moi lan deu danh gia lai.
+#
+# 5. Moi lan chi chinh 1-2 tham so roi test lai.
+
 # ---------------------------------------------------------------------------
-# Runtime config
+# Runtime config noi bo - it khi can chinh
 # ---------------------------------------------------------------------------
 
 CAM_INDEX = 0
 FRAME_W = 1280
 FRAME_H = 720
 DETECT_FPS = 10
-MOIRE_EVERY_N_DETECT = 3
-V4_COSINE_THRESHOLD = 0.52
 
 SCREENSHOT_DIR = Path(__file__).resolve().parent / "screenshots"
 LOG_DIR = Path(__file__).resolve().parent / "logs"
@@ -73,11 +137,9 @@ CHALLENGE_TEXT = {
 }
 
 CHALLENGE_TIMEOUT = 7.0
-CHALLENGE_COOLDOWN = 12.0
 CHALLENGE_BASELINE_FRAMES = 5
 CHALLENGE_POSE_FRAMES = 2
 TURN_THRESHOLD = 0.06
-MOIRE_CONTEXT_SCALE = 1.65
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +258,7 @@ class MoireDetectorV4:
         "low_mid": 0.75,
         "mid": 1.00,
         "mid_high": 1.25,
-        "high": 0.90,
+        "high": MOIRE_HIGH_BAND_WEIGHT,
     }
 
     PEAK_WEAK = 2.25
@@ -292,9 +354,9 @@ class MoireDetectorV4:
         avg_score = round(float(np.mean(self.history)), 3)
 
         strong_count = len([s for s in strong_signals if not s.startswith("weak")])
-        if screen_evidence >= 0.68 and strong_count >= 2:
+        if screen_evidence >= MOIRE_FRAME_BLOCK_EVIDENCE and strong_count >= 2:
             decision = "block"
-        elif screen_evidence >= 0.38 or strong_signals:
+        elif screen_evidence >= MOIRE_FRAME_SUSPICIOUS_EVIDENCE or strong_signals:
             decision = "suspicious"
         else:
             decision = "clean"
@@ -488,10 +550,10 @@ class RollingMoireDecision:
         elif samples >= 3 and (
             suspicious_count >= 3
             or min_score < 0.30
-            or p10_score < 0.38
+            or p10_score < MOIRE_ROLLING_SUSPICIOUS_P10_MAX
         ):
             decision = "suspicious"
-        elif samples >= 4 and clean_count >= 3 and mean_score > 0.55:
+        elif samples >= 4 and clean_count >= 3 and mean_score > MOIRE_ROLLING_CLEAN_MEAN_MIN:
             decision = "clean"
 
         return {
