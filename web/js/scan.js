@@ -62,7 +62,7 @@ async function loadScanCapabilities(force = false) {
 
 async function getLocalStatus() {
     try {
-        return await api('/api/scan/v3/local/status');
+        return await api('/api/scan/v4/local/status');
     } catch (error) {
         console.warn('Local scan status failed:', error);
         return null;
@@ -152,7 +152,7 @@ async function activateLocalDirect() {
     updateAutoScanUI();
     const status = await getLocalStatus();
     if (!['running', 'starting', 'challenge', 'cooldown'].includes(status?.runner_state)) {
-        const result = await api('/api/scan/v3/local/start', { method: 'POST' });
+        const result = await api('/api/scan/v4/local/start', { method: 'POST' });
         if (!result.success) throw new Error(result.message || 'Failed to start local direct scan');
     }
     openLocalSocket();
@@ -215,7 +215,7 @@ async function stopLocalTransport(stopRunner = false) {
     closeLocalSocket();
     if (stopRunner) {
         try {
-            await api('/api/scan/v3/local/stop', { method: 'POST' });
+            await api('/api/scan/v4/local/stop', { method: 'POST' });
         } catch (error) {
             console.warn('Local runner stop failed:', error);
         }
@@ -233,7 +233,7 @@ function openLocalSocket() {
     if (localSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(localSocket.readyState)) return;
     closeLocalSocket();
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    localSocket = new WebSocket(`${protocol}//${window.location.host}/ws/scan-v3/local`);
+    localSocket = new WebSocket(`${protocol}//${window.location.host}/ws/scan-v4/local`);
     localSocket.onopen = () => document.getElementById('autoscan-status').textContent = 'Local Direct: connected';
     localSocket.onmessage = event => handleSocketMessage(event, 'local_direct');
     localSocket.onerror = () => document.getElementById('autoscan-status').textContent = 'Local Direct: connection error';
@@ -282,7 +282,7 @@ function openBrowserSocket() {
     if (browserSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(browserSocket.readyState)) return;
     closeBrowserSocket();
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    browserSocket = new WebSocket(`${protocol}//${window.location.host}/ws/scan-v3`);
+    browserSocket = new WebSocket(`${protocol}//${window.location.host}/ws/scan-v4`);
     browserSocket.binaryType = 'arraybuffer';
     browserSocket.onopen = () => document.getElementById('autoscan-status').textContent = 'Browser Stream: connected';
     browserSocket.onmessage = event => handleSocketMessage(event, 'browser_ws');

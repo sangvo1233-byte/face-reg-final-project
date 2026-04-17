@@ -36,6 +36,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     try:
+        from core.local_runner_v4 import get_local_runner_v4
+        get_local_runner_v4().stop()
+    except Exception:
+        pass
+    try:
         from core.camera import get_camera
         get_camera().stop()
     except Exception:

@@ -6,6 +6,15 @@ from fastapi import APIRouter
 import config
 from core.face_engine import get_engine
 from core.database import get_db
+from core.detect_v4 import (
+    MOIRE_BLOCK_THRESHOLD,
+    MOIRE_SCREEN_THRESHOLD,
+    PHONE_RECT_CONTEXT_SCALE,
+    PHONE_RECT_STRONG_THRESHOLD,
+    PHONE_RECT_SUSPICIOUS_THRESHOLD,
+    PHONE_RECT_VERTICAL_RATIO,
+    V4_COSINE_THRESHOLD,
+)
 
 router = APIRouter(tags=["system"])
 
@@ -36,7 +45,7 @@ async def system_capabilities():
     """Report available API versions and V2/V3 features."""
     return {
         "enroll_versions": ["v1", "v2"],
-        "scan_versions": ["v1", "v3", "v3_ws", "local_direct"],
+        "scan_versions": ["v1", "v3", "v3_ws", "local_direct", "v4", "v4_ws", "local_direct_v4"],
         "scan_mode_default": "auto",
         "scan_modes": ["auto", "local_direct", "browser_ws"],
         "local_direct_available": True,
@@ -49,6 +58,11 @@ async def system_capabilities():
             "default_threshold": config.COSINE_THRESHOLD,
             "enroll_v2_angles": ["front", "left", "right"],
             "server_camera_scan": True,
+            "detect_v4": True,
+            "screen_context": True,
+            "phone_rectangle": True,
+            "portrait_phone_roi": True,
+            "enhanced_moire": True,
         },
         "thresholds": {
             "v1_cosine": config.COSINE_THRESHOLD,
@@ -60,5 +74,12 @@ async def system_capabilities():
             "v2_blur_min": config.ENROLL_V2_BLUR_MIN,
             "v2_pose_front_max": config.ENROLL_V2_POSE_FRONT_MAX_DISP,
             "v2_pose_turn_min": config.ENROLL_V2_POSE_TURN_THRESHOLD,
+            "v4_cosine": V4_COSINE_THRESHOLD,
+            "v4_moire_screen": MOIRE_SCREEN_THRESHOLD,
+            "v4_moire_block": MOIRE_BLOCK_THRESHOLD,
+            "v4_phone_rect_suspicious": PHONE_RECT_SUSPICIOUS_THRESHOLD,
+            "v4_phone_rect_strong": PHONE_RECT_STRONG_THRESHOLD,
+            "v4_phone_rect_context_scale": PHONE_RECT_CONTEXT_SCALE,
+            "v4_phone_rect_vertical_ratio": PHONE_RECT_VERTICAL_RATIO,
         },
     }
