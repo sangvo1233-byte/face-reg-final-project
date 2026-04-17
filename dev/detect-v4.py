@@ -158,22 +158,28 @@ PHONE_RECT_ENABLED = True
 # True: cong diem nghi ngo khi thay mat nam trong khung chu nhat.
 # False: quay lai V4.1, khong dung geometry cua thiet bi.
 
-PHONE_RECT_CONTEXT_SCALE = 2.45
+PHONE_RECT_CONTEXT_SCALE = 2.80
 # Do no ROI de tim vien/mep/goc dien thoai quanh mat.
 # Tang: de thay vien dien thoai hon.
 # Giam: it dinh nham khung cua/poster/nen hon.
 
-PHONE_RECT_SUSPICIOUS_THRESHOLD = 0.45
+PHONE_RECT_VERTICAL_RATIO = 1.6
+# Ty le chieu doc / chieu ngang cua ROI phat hien dien thoai.
+# Dien thoai dung thuc te khoang 16:9 ~ 1.78, nhung de 1.6 de du margin.
+# Tang: ROI cao hon, phu hop dien thoai doc.
+# Giam ve 1.0: ROI hinh vuong nhu cu.
+
+PHONE_RECT_SUSPICIOUS_THRESHOLD = 0.38
 # Diem bat dau xem khung chu nhat la nghi ngo.
 # Giam: nhay hon voi dien thoai OLED.
 # Tang: it false positive hon voi background co khung.
 
-PHONE_RECT_STRONG_THRESHOLD = 0.68
+PHONE_RECT_STRONG_THRESHOLD = 0.58
 # Diem khung chu nhat rat giong dien thoai/man hinh.
 # Giam: challenge/block manh hon.
 # Tang: bao thu hon, can tin hieu ro hon.
 
-PHONE_RECT_ROLLING_STRONG_COUNT = 3
+PHONE_RECT_ROLLING_STRONG_COUNT = 2
 # Can bao nhieu frame gan day thay phone-rect STRONG de nang thanh BLOCK candidate.
 # Giam: bat nhanh hon.
 # Tang: on dinh hon, it block nham hon.
@@ -975,7 +981,7 @@ class PhoneRectangleDetectorV42:
         if not PHONE_RECT_ENABLED:
             return self._empty("disabled")
 
-        roi, roi_bbox = expanded_roi(frame, face_bbox, PHONE_RECT_CONTEXT_SCALE)
+        roi, roi_bbox = self._portrait_roi(frame, face_bbox)
         if roi is None or roi.size == 0:
             return self._empty("empty_roi", roi_bbox)
 
@@ -1219,6 +1225,26 @@ class PhoneRectangleDetectorV42:
         fx1, fy1, fx2, fy2 = face_bbox
         rx1, ry1, _, _ = roi_bbox
         return [fx1 - rx1, fy1 - ry1, fx2 - rx1, fy2 - ry1]
+
+    @staticmethod
+    def _portrait_roi(frame: np.ndarray, bbox: list[int]) -> tuple[np.ndarray, list[int]]:
+        """ROI hinh chu nhat dung (portrait) phu hop dien thoai doc."""
+        fh, fw = frame.shape[:2]
+        x1, y1, x2, y2 = bbox
+        bw, bh = max(1, x2 - x1), max(1, y2 - y1)
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        base = max(bw, bh) * PHONE_RECT_CONTEXT_SCALE
+        half_w = base / 2.0
+        half_h = (base * PHONE_RECT_VERTICAL_RATIO) / 2.0
+        ex1 = int(round(cx - half_w))
+        ey1 = int(round(cy - half_h))
+        ex2 = int(round(cx + half_w))
+        ey2 = int(round(cy + half_h))
+        ex1, ey1 = max(0, ex1), max(0, ey1)
+        ex2, ey2 = min(fw, ex2), min(fh, ey2)
+        if ex2 <= ex1 or ey2 <= ey1:
+            return safe_roi(frame, bbox), bbox
+        return frame[ey1:ey2, ex1:ex2], [ex1, ey1, ex2, ey2]
 
 
 @dataclass
