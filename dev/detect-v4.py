@@ -77,6 +77,7 @@ CHALLENGE_COOLDOWN = 12.0
 CHALLENGE_BASELINE_FRAMES = 5
 CHALLENGE_POSE_FRAMES = 2
 TURN_THRESHOLD = 0.06
+MOIRE_CONTEXT_SCALE = 1.65
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +148,29 @@ def safe_roi(frame: np.ndarray, bbox: list[int]) -> np.ndarray:
     if x2 <= x1 or y2 <= y1:
         return np.empty((0, 0, 3), dtype=np.uint8)
     return frame[y1:y2, x1:x2]
+
+
+def expanded_roi(frame: np.ndarray, bbox: list[int], scale: float = MOIRE_CONTEXT_SCALE) -> tuple[np.ndarray, list[int]]:
+    """Return a context crop around the face for screen/glare cues.
+
+    The original V3 moire crop used the tight face bbox. V4 keeps that UI bbox
+    but analyzes a larger crop so phone bezel, screen glare, and surrounding
+    flat display regions can influence the FFT/grid features.
+    """
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = bbox
+    bw, bh = max(1, x2 - x1), max(1, y2 - y1)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    side = max(bw, bh) * scale
+    ex1 = int(round(cx - side / 2.0))
+    ey1 = int(round(cy - side / 2.0))
+    ex2 = int(round(cx + side / 2.0))
+    ey2 = int(round(cy + side / 2.0))
+    ex1, ey1 = max(0, ex1), max(0, ey1)
+    ex2, ey2 = min(w, ex2), min(h, ey2)
+    if ex2 <= ex1 or ey2 <= ey1:
+        return safe_roi(frame, bbox), bbox
+    return frame[ey1:ey2, ex1:ex2], [ex1, ey1, ex2, ey2]
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +648,8 @@ class CalibrationLogger:
             "final_status": payload.get("status", ""),
             "match_score": round(float(payload.get("match_score", 0.0)), 4),
             "matched": bool(payload.get("matched", False)),
+            "moire_context_scale": MOIRE_CONTEXT_SCALE,
+            "moire_roi_bbox": payload.get("moire_roi_bbox", []),
             "moire": payload.get("moire", {}),
             "rolling": payload.get("rolling", {}),
             "liveness": payload.get("liveness", {}),
@@ -985,7 +1011,7 @@ def process_face(
 ) -> dict[str, Any]:
     bbox = bbox_list(face.bbox)
     x1, y1, x2, y2 = bbox
-    roi = safe_roi(frame, bbox)
+    roi, moire_roi_bbox = expanded_roi(frame, bbox)
 
     if run_moire or face_index not in last_moire:
         moire = moire_detector.analyze(roi)
@@ -1140,6 +1166,7 @@ def process_face(
             "decision": passive_status,
         },
         "metrics": metrics,
+        "moire_roi_bbox": moire_roi_bbox,
         "challenge": {
             "active": challenge.active,
             "type": challenge.current_type,
@@ -1300,7 +1327,9 @@ def main():
                 conf_bar(frame, x1, y2, x2, result.get("confidence", 0.0), color)
                 draw_moire_badge(frame, x2, y2, result.get("moire"), result.get("rolling", {}))
                 if show_moire_overlay:
-                    draw_moire_spectrum(frame, safe_roi(frame, result["bbox"]), x1, y1)
+                    mx1, my1, mx2, my2 = result.get("moire_roi_bbox", result["bbox"])
+                    cv2.rectangle(frame, (mx1, my1), (mx2, my2), C_PURPLE, 1, cv2.LINE_AA)
+                    draw_moire_spectrum(frame, safe_roi(frame, result.get("moire_roi_bbox", result["bbox"])), x1, y1)
 
             draw_challenge_overlay(frame, challenge)
             draw_hud(
