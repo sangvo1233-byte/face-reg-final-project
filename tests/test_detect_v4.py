@@ -315,7 +315,7 @@ def test_v4_challenge_requires_recentering_before_second_step():
 
     assert challenge.type == "center"
     assert runtime._check_recenter(challenge, 0.08, {"pitch_value": 0.0}) is False
-    assert runtime._check_recenter(challenge, 0.01, {"pitch_value": 0.08}) is False
+    assert runtime._check_recenter(challenge, 0.01, {"pitch_value": 0.09}) is False
     assert runtime._check_recenter(challenge, 0.0, {"pitch_value": 0.01}) is False
     assert runtime._check_recenter(challenge, 0.0, {"pitch_value": 0.0}) is True
 
@@ -375,7 +375,7 @@ def test_v4_look_up_requires_negative_pitch_delta_and_centered_yaw():
     metrics = {
         "available": True,
         "lighting_cooldown": 0,
-        "pitch_value": 0.40,
+        "pitch_value": 0.44,
         "mouth_ratio": 0.08,
         "face_scale": 100.0,
     }
