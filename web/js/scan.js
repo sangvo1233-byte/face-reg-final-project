@@ -810,12 +810,19 @@ function handleChallengeRequired(message) {
 function handleChallengeProgress(message) {
     const progress = message.challenge_progress;
     if (!progress) return;
+    if (message.challenge) {
+        state.activeChallenge = message.challenge;
+        syncChallengeOverlay(message.challenge, progress);
+    }
     if (progress.remaining_ms != null) {
         updateChallengeCountdown(Math.max(1, Math.ceil(progress.remaining_ms / 1000)));
     }
     const collected = progress.collected_frames ?? progress.frames_processed ?? 0;
     const required = Math.max(progress.required_frames || 1, 1);
-    updateChallengeProgress(Math.min(100, Math.round((collected / required) * 100)), collected);
+    const percent = progress.progress_pct != null
+        ? Math.max(0, Math.min(100, Number(progress.progress_pct)))
+        : Math.min(100, Math.round((collected / required) * 100));
+    updateChallengeProgress(percent, collected);
     document.getElementById('scan-challenge-status').textContent =
         progress.feedback || progress.label || 'Verifying...';
 }
@@ -878,12 +885,9 @@ async function showScanChallengeOverlay(result) {
     const overlay = document.getElementById('scan-challenge-overlay');
     const viewfinder = document.querySelector('.viewfinder');
     if (!overlay) return;
-    document.getElementById('scan-challenge-title').textContent = result.challenge.label || 'Security Challenge';
-    document.getElementById('scan-challenge-instruction').textContent =
-        result.challenge.instruction || 'Follow the prompt on camera';
+    syncChallengeOverlay(result.challenge, result.challenge_progress);
     document.getElementById('scan-challenge-status').textContent =
         result.message || 'Additional verification required';
-    updateChallengeAction(result.challenge.type);
     updateChallengeCountdown(Math.max(1, Math.ceil((result.challenge.remaining_ms || 6000) / 1000)), true);
     updateChallengeProgress(0, 0);
     overlay.classList.remove('is-visible');
@@ -925,12 +929,33 @@ function updateChallengeAction(type = '') {
     const map = {
         turn_left: { cls: 'left', icon: 'arrow_back' },
         turn_right: { cls: 'right', icon: 'arrow_forward' },
-        blink: { cls: 'blink', icon: 'visibility_off' },
-        center: { cls: 'front', icon: 'arrow_upward' }
+        look_up: { cls: 'up', icon: 'arrow_upward' },
+        look_down: { cls: 'down', icon: 'arrow_downward' },
+        open_mouth: { cls: 'mouth', icon: 'sentiment_satisfied' },
+        center_hold: { cls: 'front', icon: 'center_focus_strong' },
+        center: { cls: 'front', icon: 'center_focus_strong' }
     };
     const meta = map[type] || map.center;
     action.className = `scan-challenge-action ${meta.cls}`;
     arrow.textContent = meta.icon;
+}
+
+function syncChallengeOverlay(challenge, progress = null) {
+    if (!challenge) return;
+    const title = document.getElementById('scan-challenge-title');
+    const instruction = document.getElementById('scan-challenge-instruction');
+    const stepNumber = challenge.step_number || progress?.step_number || 1;
+    const stepTotal = challenge.step_total || progress?.step_total || 1;
+    const label = challenge.label || progress?.label || 'Security Challenge';
+    if (title) {
+        title.textContent = stepTotal > 1
+            ? `Step ${stepNumber}/${stepTotal}: ${label}`
+            : label;
+    }
+    if (instruction) {
+        instruction.textContent = challenge.instruction || progress?.instruction || 'Follow the prompt on camera';
+    }
+    updateChallengeAction(challenge.type || progress?.type || '');
 }
 
 function updateChallengeProgress(percent, frameCount) {

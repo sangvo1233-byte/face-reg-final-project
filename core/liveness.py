@@ -24,6 +24,10 @@ import config
 
 RIGHT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 LEFT_EYE_IDX = [362, 385, 387, 263, 373, 380]
+UPPER_LIP_IDX = 13
+LOWER_LIP_IDX = 14
+MOUTH_LEFT_IDX = 78
+MOUTH_RIGHT_IDX = 308
 FACE_LANDMARKER_MODEL = str(config.MODELS_DIR / "face_landmarker.task")
 
 
@@ -52,6 +56,16 @@ class _FaceTrack:
     center_x: float = 0.0
     center_y: float = 0.0
     frame_count: int = 0
+    closed_frames: int = 0
+    open_frames: int = 0
+    last_eye_luma: float | None = None
+    lighting_cooldown: int = 0
+    pitch_value: float = 0.0
+    pitch_baseline: float = 0.0
+    mouth_ratio: float = 0.0
+    mouth_baseline: float = 0.0
+    face_scale: float = 0.0
+    scale_baseline: float = 0.0
 
 
 class MultiFrameLiveness:
@@ -81,6 +95,7 @@ class MultiFrameLiveness:
             return
 
         h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         self._frame_ts += 33
@@ -111,8 +126,29 @@ class MultiFrameLiveness:
             track.center_y = cy
             track.frame_count += 1
             track.last_ear = ear
-            track.ear_history.append(ear)
             track.pos_history.append((cx, cy))
+            self._update_challenge_metrics(track, face_lm, w, h)
+
+            eye_luma = self._eye_luminance(gray, face_lm, w, h)
+            lighting_jump = (
+                track.last_eye_luma is not None
+                and abs(eye_luma - track.last_eye_luma)
+                >= config.DETECT_V3_STREAM_BLINK_BRIGHTNESS_JUMP_THRESHOLD
+            )
+            track.last_eye_luma = eye_luma
+
+            if lighting_jump:
+                track.lighting_cooldown = max(
+                    track.lighting_cooldown,
+                    config.DETECT_V3_STREAM_BLINK_LIGHTING_COOLDOWN_FRAMES + 1,
+                )
+                self._reset_blink_candidate(track, ear)
+
+            if track.lighting_cooldown > 0:
+                track.lighting_cooldown -= 1
+                continue
+
+            track.ear_history.append(ear)
 
             baseline = self._update_open_ear_baseline(track, ear)
             track.min_ear_since_open = min(track.min_ear_since_open, ear)
@@ -127,18 +163,73 @@ class MultiFrameLiveness:
             )
 
             if closed:
-                track.blink_state = True
-            elif track.blink_state and reopened:
-                track.blink_state = False
-                if baseline - track.min_ear_since_open >= config.DETECT_V3_BLINK_EAR_DELTA * 0.7:
-                    track.blink_count += 1
-                track.min_ear_since_open = ear
+                track.closed_frames += 1
+                track.open_frames = 0
+                if track.closed_frames >= config.DETECT_V3_STREAM_BLINK_MIN_CLOSED_FRAMES:
+                    track.blink_state = True
+                if track.closed_frames > config.DETECT_V3_STREAM_BLINK_MAX_CLOSED_FRAMES:
+                    self._reset_blink_candidate(track, ear)
+            elif reopened:
+                if track.blink_state:
+                    track.open_frames += 1
+                    if track.open_frames >= config.DETECT_V3_STREAM_BLINK_MIN_OPEN_FRAMES:
+                        if baseline - track.min_ear_since_open >= config.DETECT_V3_BLINK_EAR_DELTA * 0.7:
+                            track.blink_count += 1
+                        self._reset_blink_candidate(track, ear)
+                else:
+                    track.closed_frames = 0
+                    track.open_frames = min(
+                        track.open_frames + 1,
+                        config.DETECT_V3_STREAM_BLINK_MIN_OPEN_FRAMES,
+                    )
+                    track.min_ear_since_open = ear
+            else:
+                if not track.blink_state:
+                    track.closed_frames = 0
+                    track.open_frames = 0
 
         self._cleanup(now)
 
     def get_liveness(self, bbox) -> LivenessStatus:
         track = self._track_for_bbox(bbox)
         return self._status(track)
+
+    def get_challenge_metrics(self, bbox) -> dict[str, float]:
+        track = self._track_for_bbox(bbox)
+        if track is None:
+            return {
+                "available": False,
+                "pitch_value": 0.0,
+                "pitch_baseline": 0.0,
+                "pitch_disp": 0.0,
+                "mouth_ratio": 0.0,
+                "mouth_baseline": 0.0,
+                "mouth_delta": 0.0,
+                "face_scale": 0.0,
+                "scale_baseline": 0.0,
+                "scale_delta": 0.0,
+                "lighting_cooldown": 0,
+                "track_time": 0.0,
+            }
+
+        scale_delta = 0.0
+        if track.scale_baseline > 1e-6:
+            scale_delta = (track.face_scale - track.scale_baseline) / track.scale_baseline
+
+        return {
+            "available": True,
+            "pitch_value": round(float(track.pitch_value), 4),
+            "pitch_baseline": round(float(track.pitch_baseline), 4),
+            "pitch_disp": round(float(track.pitch_value - track.pitch_baseline), 4),
+            "mouth_ratio": round(float(track.mouth_ratio), 4),
+            "mouth_baseline": round(float(track.mouth_baseline), 4),
+            "mouth_delta": round(float(max(0.0, track.mouth_ratio - track.mouth_baseline)), 4),
+            "face_scale": round(float(track.face_scale), 4),
+            "scale_baseline": round(float(track.scale_baseline), 4),
+            "scale_delta": round(float(scale_delta), 4),
+            "lighting_cooldown": int(track.lighting_cooldown),
+            "track_time": round(float(self._track_time(track, time.time())), 3),
+        }
 
     def primary_status(self) -> dict[str, Any]:
         track = self._primary_track()
@@ -181,6 +272,92 @@ class MultiFrameLiveness:
         if horizontal < 1e-6:
             return 0.3
         return (vertical_1 + vertical_2) / (2.0 * horizontal)
+
+    def _eye_luminance(self, gray: np.ndarray, landmarks, w: int, h: int) -> float:
+        indices = LEFT_EYE_IDX + RIGHT_EYE_IDX
+        xs = [landmarks[i].x * w for i in indices]
+        ys = [landmarks[i].y * h for i in indices]
+        x1 = max(0, int(min(xs) - 6))
+        y1 = max(0, int(min(ys) - 6))
+        x2 = min(w, int(max(xs) + 6))
+        y2 = min(h, int(max(ys) + 6))
+        if x2 <= x1 or y2 <= y1:
+            return float(np.mean(gray))
+        return float(np.mean(gray[y1:y2, x1:x2]))
+
+    def _update_challenge_metrics(self, track: _FaceTrack, landmarks, w: int, h: int):
+        eye_center = self._mean_point(landmarks, LEFT_EYE_IDX + RIGHT_EYE_IDX, w, h)
+        nose = self._point(landmarks, 1, w, h)
+        upper_lip = self._point(landmarks, UPPER_LIP_IDX, w, h)
+        lower_lip = self._point(landmarks, LOWER_LIP_IDX, w, h)
+        mouth_left = self._point(landmarks, MOUTH_LEFT_IDX, w, h)
+        mouth_right = self._point(landmarks, MOUTH_RIGHT_IDX, w, h)
+
+        if eye_center is None or nose is None or upper_lip is None or lower_lip is None:
+            return
+
+        mouth_center = (
+            (upper_lip[0] + lower_lip[0]) / 2.0,
+            (upper_lip[1] + lower_lip[1]) / 2.0,
+        )
+        vertical_span = max(mouth_center[1] - eye_center[1], 1e-6)
+        pitch_value = (nose[1] - eye_center[1]) / vertical_span
+
+        if mouth_left is not None and mouth_right is not None:
+            mouth_width = self._distance(mouth_left, mouth_right)
+        else:
+            mouth_width = self._distance(eye_center, nose)
+        mouth_gap = self._distance(upper_lip, lower_lip)
+        mouth_ratio = mouth_gap / max(mouth_width, 1e-6)
+
+        left_eye = self._mean_point(landmarks, LEFT_EYE_IDX, w, h)
+        right_eye = self._mean_point(landmarks, RIGHT_EYE_IDX, w, h)
+        face_scale = self._distance(left_eye, right_eye) if left_eye is not None and right_eye is not None else 0.0
+
+        track.pitch_value = float(pitch_value)
+        track.mouth_ratio = float(mouth_ratio)
+        track.face_scale = float(face_scale)
+        self._update_metric_baselines(track)
+
+    def _update_metric_baselines(self, track: _FaceTrack):
+        if track.frame_count <= 5 or track.pitch_baseline == 0.0:
+            track.pitch_baseline = float(track.pitch_value)
+        else:
+            track.pitch_baseline = track.pitch_baseline * 0.85 + track.pitch_value * 0.15
+
+        if track.frame_count <= 5 or track.scale_baseline == 0.0:
+            track.scale_baseline = float(track.face_scale)
+        else:
+            track.scale_baseline = track.scale_baseline * 0.85 + track.face_scale * 0.15
+
+        if track.frame_count <= 5 or track.mouth_baseline == 0.0:
+            track.mouth_baseline = float(track.mouth_ratio)
+        elif track.mouth_ratio <= track.mouth_baseline + 0.03:
+            track.mouth_baseline = track.mouth_baseline * 0.9 + track.mouth_ratio * 0.1
+
+    def _point(self, landmarks, index: int, w: int, h: int) -> tuple[float, float] | None:
+        if index >= len(landmarks):
+            return None
+        point = landmarks[index]
+        return float(point.x * w), float(point.y * h)
+
+    def _mean_point(self, landmarks, indices: list[int], w: int, h: int) -> tuple[float, float] | None:
+        points = [self._point(landmarks, index, w, h) for index in indices]
+        points = [point for point in points if point is not None]
+        if not points:
+            return None
+        arr = np.asarray(points, dtype=np.float32)
+        return float(np.mean(arr[:, 0])), float(np.mean(arr[:, 1]))
+
+    @staticmethod
+    def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
+        return float(np.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2))
+
+    def _reset_blink_candidate(self, track: _FaceTrack, ear: float):
+        track.blink_state = False
+        track.closed_frames = 0
+        track.open_frames = 0
+        track.min_ear_since_open = ear
 
     def _update_open_ear_baseline(self, track: _FaceTrack, ear: float) -> float:
         if track.frame_count <= 5:
@@ -244,7 +421,17 @@ class MultiFrameLiveness:
         blink_score = min(1.0, track.blink_count / 1.0)
         move_score = min(1.0, movement / max(config.DETECT_V3_STREAM_MOVEMENT_THRESHOLD * 3, 1e-6))
         score = round(float(blink_score * 0.85 + move_score * 0.15), 3)
+        min_required_movement = max(config.DETECT_V3_STREAM_MOVEMENT_THRESHOLD * 0.2, 0.35)
 
+        if track.lighting_cooldown > 0:
+            return LivenessStatus(None, score, "lighting_unstable", track.blink_count, track.last_ear, movement, track_time)
+        if track.blink_count > 0 and (
+            track_time < config.DETECT_V3_STREAM_MIN_TRACK_SECONDS
+            or track.frame_count < config.DETECT_V3_STREAM_LIVE_MIN_FRAMES
+        ):
+            return LivenessStatus(None, score, "checking", track.blink_count, track.last_ear, movement, track_time)
+        if track.blink_count > 0 and movement < min_required_movement:
+            return LivenessStatus(None, score, "movement_required", track.blink_count, track.last_ear, movement, track_time)
         if track.blink_count > 0:
             return LivenessStatus(True, score, "pass", track.blink_count, track.last_ear, movement, track_time)
         if track_time < config.DETECT_V3_STREAM_MIN_TRACK_SECONDS:
@@ -259,6 +446,10 @@ def liveness_status_to_dict(status: LivenessStatus) -> dict[str, Any]:
         state, message = "waiting_face", "Move your face into the frame"
     elif status.reason == "checking":
         state, message = "checking", "Tracking liveness..."
+    elif status.reason == "lighting_unstable":
+        state, message = "lighting_unstable", "Lighting changed too quickly"
+    elif status.reason == "movement_required":
+        state, message = "movement_required", "Move slightly while facing the camera"
     elif status.reason == "blink_required":
         state, message = "blink_required", "Blink once to confirm liveness"
     elif status.is_live is True:
@@ -294,6 +485,9 @@ class StreamingLivenessTracker:
 
     def get_liveness(self, bbox) -> dict[str, Any]:
         return liveness_status_to_dict(self._tracker.get_liveness(bbox))
+
+    def get_challenge_metrics(self, bbox) -> dict[str, Any]:
+        return self._tracker.get_challenge_metrics(bbox)
 
 
 _liveness = None

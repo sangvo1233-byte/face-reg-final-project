@@ -4,7 +4,10 @@ Focused Detect V4.4 backend tests.
 import asyncio
 import os
 import sys
+import time
+from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from fastapi import FastAPI
@@ -97,6 +100,237 @@ def test_runtime_diagnostics_expose_overlay_geometry():
     assert diagnostics["face_bbox"] == [100, 80, 220, 240]
     assert diagnostics["moire_roi_bbox"] == [70, 40, 250, 280]
     assert diagnostics["phone_rect"]["roi_bbox"] == [20, 10, 320, 400]
+
+
+def test_liveness_ignores_brightness_flicker_as_fake_blink():
+    from core.liveness import MultiFrameLiveness
+
+    landmarks = [SimpleNamespace(x=0.5, y=0.5) for _ in range(388)]
+    landmarks[1] = SimpleNamespace(x=0.5, y=0.5)
+    for index, x, y in [
+        (33, 0.42, 0.40), (160, 0.45, 0.38), (158, 0.47, 0.38),
+        (133, 0.50, 0.40), (153, 0.47, 0.42), (144, 0.45, 0.42),
+        (362, 0.50, 0.40), (385, 0.53, 0.38), (387, 0.55, 0.38),
+        (263, 0.58, 0.40), (373, 0.55, 0.42), (380, 0.53, 0.42),
+    ]:
+        landmarks[index] = SimpleNamespace(x=x, y=y)
+
+    tracker = MultiFrameLiveness.__new__(MultiFrameLiveness)
+    tracker._landmarker = MagicMock()
+    tracker._landmarker.detect_for_video.return_value = MagicMock(face_landmarks=[landmarks])
+    tracker._available = True
+    tracker._tracks = {}
+    tracker._next_id = 0
+    tracker._frame_ts = 0
+    tracker._calc_ear = MagicMock(side_effect=[0.30, 0.30, 0.23, 0.23, 0.30, 0.30])
+
+    for level in (120, 220, 120):
+        frame = np.full((120, 120, 3), level, dtype=np.uint8)
+        tracker.process_frame(frame)
+
+    track = next(iter(tracker._tracks.values()))
+    assert track.blink_count == 0
+
+
+def test_liveness_requires_motion_before_pass():
+    import config
+    from core.liveness import MultiFrameLiveness, _FaceTrack
+
+    tracker = MultiFrameLiveness.__new__(MultiFrameLiveness)
+    tracker._available = True
+
+    track = _FaceTrack(first_seen=time.time() - 3.0)
+    track.blink_count = 1
+    track.frame_count = config.DETECT_V3_STREAM_LIVE_MIN_FRAMES
+    track.last_ear = 0.30
+    track.pos_history.extend([(100.0, 100.0)] * track.frame_count)
+
+    status = tracker._status(track)
+
+    assert status.is_live is None
+    assert status.reason == "movement_required"
+
+
+def test_liveness_exposes_challenge_metrics_from_landmarks():
+    from core.liveness import MultiFrameLiveness
+
+    landmarks = [SimpleNamespace(x=0.5, y=0.5) for _ in range(388)]
+    for index, x, y in [
+        (1, 0.50, 0.50),
+        (13, 0.50, 0.58),
+        (14, 0.50, 0.62),
+        (78, 0.43, 0.60),
+        (308, 0.57, 0.60),
+        (33, 0.42, 0.40), (160, 0.45, 0.38), (158, 0.47, 0.38),
+        (133, 0.50, 0.40), (153, 0.47, 0.42), (144, 0.45, 0.42),
+        (362, 0.50, 0.40), (385, 0.53, 0.38), (387, 0.55, 0.38),
+        (263, 0.58, 0.40), (373, 0.55, 0.42), (380, 0.53, 0.42),
+    ]:
+        landmarks[index] = SimpleNamespace(x=x, y=y)
+
+    tracker = MultiFrameLiveness.__new__(MultiFrameLiveness)
+    tracker._landmarker = MagicMock()
+    tracker._landmarker.detect_for_video.return_value = MagicMock(face_landmarks=[landmarks])
+    tracker._available = True
+    tracker._tracks = {}
+    tracker._next_id = 0
+    tracker._frame_ts = 0
+    tracker._calc_ear = MagicMock(return_value=0.30)
+
+    frame = np.full((120, 120, 3), 120, dtype=np.uint8)
+    tracker.process_frame(frame)
+
+    metrics = tracker.get_challenge_metrics([40, 30, 80, 90])
+
+    assert metrics["available"] is True
+    assert metrics["pitch_value"] > 0.0
+    assert metrics["mouth_ratio"] > 0.0
+    assert metrics["face_scale"] > 0.0
+
+
+def test_v4_challenge_defaults_to_mixed_action_sequences():
+    from core.runtime_v4 import DetectV4RuntimeSession
+
+    runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
+    runtime.active_challenge = None
+    runtime.last_challenge_student_id = None
+    runtime.frame_timestamps = deque(maxlen=60)
+
+    with patch("core.runtime_v4.random.choice", return_value=("TURN_LEFT", "OPEN_MOUTH")) as mock_choice:
+        result = runtime._start_challenge(
+            {"student_id": "HS001", "name": "Sample"},
+            {"blinks": 0},
+            {"frame_size": {"width": 640, "height": 480}},
+            "moire suspicious",
+        )
+
+    assert runtime.active_challenge.type == "turn_left"
+    assert runtime.active_challenge.steps == ("TURN_LEFT", "OPEN_MOUTH")
+    assert result["challenge"]["type"] == "turn_left"
+    assert result["challenge"]["step_total"] == 2
+    assert result["challenge"]["step_number"] == 1
+    assert "sequence" not in result["challenge"]
+    assert mock_choice.call_args.args[0] == [
+        ("TURN_LEFT", "OPEN_MOUTH"),
+        ("TURN_RIGHT", "LOOK_UP"),
+        ("LOOK_DOWN", "TURN_LEFT"),
+        ("LOOK_UP", "OPEN_MOUTH"),
+        ("CENTER_HOLD", "TURN_RIGHT"),
+        ("LOOK_DOWN", "OPEN_MOUTH"),
+    ]
+
+
+def test_v4_challenge_requires_recentering_before_second_step():
+    from core.runtime_v4 import ActiveChallengeV4, DetectV4RuntimeSession
+
+    runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
+    challenge = ActiveChallengeV4(("TURN_LEFT", "OPEN_MOUTH"), {"student_id": "HS001"}, {"blinks": 0}, "test")
+    challenge.neutral_yaw_baseline = 0.0
+    challenge.neutral_pitch_baseline = 0.0
+    challenge.begin_recenter()
+
+    assert challenge.type == "center"
+    assert runtime._check_recenter(challenge, 0.08, {"pitch_value": 0.0}) is False
+    assert runtime._check_recenter(challenge, 0.01, {"pitch_value": 0.08}) is False
+    assert runtime._check_recenter(challenge, 0.0, {"pitch_value": 0.01}) is False
+    assert runtime._check_recenter(challenge, 0.0, {"pitch_value": 0.0}) is True
+
+    challenge.advance_step()
+
+    assert challenge.type == "open_mouth"
+    assert challenge.step_number == 2
+
+
+def test_v4_turn_challenge_requires_yaw_and_consecutive_hold():
+    import core.detect_v4 as detect_v4
+    from core.runtime_v4 import ActiveChallengeV4, DetectV4RuntimeSession
+
+    runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
+    challenge = ActiveChallengeV4(("TURN_LEFT",), {"student_id": "HS001"}, {"blinks": 0}, "test")
+    challenge.pose_baseline = 0.0
+    challenge.pitch_baseline = 0.5
+    challenge.mouth_baseline = 0.08
+    challenge.scale_baseline = 100.0
+    challenge.pose_baseline_frames = detect_v4.CHALLENGE_BASELINE_FRAMES
+    metrics = {
+        "available": True,
+        "lighting_cooldown": 0,
+        "pitch_value": 0.5,
+        "mouth_ratio": 0.08,
+        "face_scale": 100.0,
+    }
+
+    assert runtime._check_action(challenge, 0.11, detect_v4.CHALLENGE_MIN_YAW_ANGLE - 1, metrics) is False
+    assert challenge.pose_frames_passed == 0
+
+    assert runtime._check_action(challenge, 0.11, detect_v4.CHALLENGE_MIN_YAW_ANGLE + 1, metrics) is False
+    assert runtime._check_action(challenge, 0.11, detect_v4.CHALLENGE_MIN_YAW_ANGLE + 1, metrics) is False
+    assert challenge.pose_frames_passed == detect_v4.CHALLENGE_POSE_FRAMES - 1
+
+    assert runtime._check_action(challenge, 0.04, detect_v4.CHALLENGE_MIN_YAW_ANGLE + 2, metrics) is False
+    assert challenge.pose_frames_passed == 0
+
+    assert runtime._check_action(challenge, 0.11, detect_v4.CHALLENGE_MIN_YAW_ANGLE + 2, metrics) is False
+    assert runtime._check_action(challenge, 0.11, detect_v4.CHALLENGE_MIN_YAW_ANGLE + 2, metrics) is False
+    assert runtime._check_action(challenge, 0.11, detect_v4.CHALLENGE_MIN_YAW_ANGLE + 2, metrics) is True
+
+
+def test_v4_look_up_requires_negative_pitch_delta():
+    import core.detect_v4 as detect_v4
+    from core.runtime_v4 import ActiveChallengeV4, DetectV4RuntimeSession
+
+    runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
+    challenge = ActiveChallengeV4(("LOOK_UP",), {"student_id": "HS001"}, {"blinks": 0}, "test")
+    challenge.pose_baseline = 0.0
+    challenge.pitch_baseline = 0.50
+    challenge.mouth_baseline = 0.08
+    challenge.scale_baseline = 100.0
+    challenge.pose_baseline_frames = detect_v4.CHALLENGE_BASELINE_FRAMES
+
+    metrics = {
+        "available": True,
+        "lighting_cooldown": 0,
+        "pitch_value": 0.40,
+        "mouth_ratio": 0.08,
+        "face_scale": 100.0,
+    }
+    assert runtime._check_action(challenge, 0.0, 2.0, metrics) is False
+    assert runtime._check_action(challenge, 0.0, 2.0, metrics) is False
+    assert runtime._check_action(challenge, 0.0, 2.0, metrics) is True
+
+
+def test_v4_open_mouth_requires_mouth_delta_and_hold():
+    from core.runtime_v4 import ActiveChallengeV4, DetectV4RuntimeSession
+    import core.detect_v4 as detect_v4
+
+    runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
+    challenge = ActiveChallengeV4(("OPEN_MOUTH",), {"student_id": "HS001"}, {"blinks": 0}, "test")
+    challenge.pose_baseline = 0.0
+    challenge.pitch_baseline = 0.50
+    challenge.mouth_baseline = 0.07
+    challenge.scale_baseline = 100.0
+    challenge.pose_baseline_frames = detect_v4.CHALLENGE_BASELINE_FRAMES
+
+    weak_metrics = {
+        "available": True,
+        "lighting_cooldown": 0,
+        "pitch_value": 0.50,
+        "mouth_ratio": 0.12,
+        "face_scale": 100.0,
+    }
+    strong_metrics = {
+        "available": True,
+        "lighting_cooldown": 0,
+        "pitch_value": 0.50,
+        "mouth_ratio": 0.24,
+        "face_scale": 100.0,
+    }
+
+    assert runtime._check_action(challenge, 0.0, 1.0, weak_metrics) is False
+    assert challenge.pose_frames_passed == 0
+    assert runtime._check_action(challenge, 0.0, 1.0, strong_metrics) is False
+    assert runtime._check_action(challenge, 0.0, 1.0, strong_metrics) is False
+    assert runtime._check_action(challenge, 0.0, 1.0, strong_metrics) is True
 
 
 def test_system_capabilities_include_v4():

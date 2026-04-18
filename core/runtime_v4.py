@@ -21,12 +21,24 @@ from core.anti_spoof import get_anti_spoof
 from core.database import get_db
 from core.detect_v4 import (
     CHALLENGE_BASELINE_FRAMES,
+    CHALLENGE_CENTER_HOLD_FRAMES,
+    CHALLENGE_CENTER_MAX_YAW_ANGLE,
     CHALLENGE_COOLDOWN,
+    CHALLENGE_MOUTH_FRAMES,
+    CHALLENGE_MIN_YAW_ANGLE,
     CHALLENGE_POSE_FRAMES,
+    CHALLENGE_RECENTER_PITCH_THRESHOLD,
     CHALLENGE_TIMEOUT,
     CHALLENGE_TYPES,
+    CENTER_PITCH_THRESHOLD,
+    CENTER_SCALE_DELTA,
+    CENTER_YAW_THRESHOLD,
+    LOOK_DOWN_THRESHOLD,
+    LOOK_UP_THRESHOLD,
     MOIRE_BLOCK_THRESHOLD,
     MOIRE_EVERY_N_DETECT,
+    OPEN_MOUTH_DELTA,
+    OPEN_MOUTH_MIN_RATIO,
     TURN_THRESHOLD,
     V4_COSINE_THRESHOLD,
     DETECT_VERSION,
@@ -47,38 +59,64 @@ from core.liveness import StreamingLivenessTracker
 
 
 API_CHALLENGE_TYPES = {
-    "BLINK": "blink",
+    "CENTER": "center",
+    "CENTER_HOLD": "center_hold",
     "TURN_LEFT": "turn_left",
     "TURN_RIGHT": "turn_right",
+    "LOOK_UP": "look_up",
+    "LOOK_DOWN": "look_down",
+    "OPEN_MOUTH": "open_mouth",
 }
 CHALLENGE_LABELS = {
-    "BLINK": "Blink Once",
+    "CENTER": "Return to Center",
+    "CENTER_HOLD": "Center Hold",
     "TURN_LEFT": "Turn Left",
     "TURN_RIGHT": "Turn Right",
+    "LOOK_UP": "Look Up",
+    "LOOK_DOWN": "Look Down",
+    "OPEN_MOUTH": "Open Mouth",
 }
 CHALLENGE_INSTRUCTIONS = {
-    "BLINK": "Blink once while looking at the camera",
+    "CENTER": "Look straight at the camera before the next step",
+    "CENTER_HOLD": "Look straight at the camera and hold still",
     "TURN_LEFT": "Turn your face to the LEFT",
     "TURN_RIGHT": "Turn your face to the RIGHT",
+    "LOOK_UP": "Lift your chin and LOOK UP",
+    "LOOK_DOWN": "Lower your chin and LOOK DOWN",
+    "OPEN_MOUTH": "Open your mouth clearly",
 }
+SAFE_CHALLENGE_SEQUENCES = [
+    ("TURN_LEFT", "OPEN_MOUTH"),
+    ("TURN_RIGHT", "LOOK_UP"),
+    ("LOOK_DOWN", "TURN_LEFT"),
+    ("LOOK_UP", "OPEN_MOUTH"),
+    ("CENTER_HOLD", "TURN_RIGHT"),
+    ("LOOK_DOWN", "OPEN_MOUTH"),
+]
+CHALLENGE_RECENTER_THRESHOLD = 0.035
+CHALLENGE_RECENTER_FRAMES = 2
 
 
 class ActiveChallengeV4:
-    def __init__(self, challenge_type: str, candidate: dict[str, Any], live: dict[str, Any], reason: str):
+    def __init__(self, challenge_steps: tuple[str, ...], candidate: dict[str, Any], live: dict[str, Any], reason: str):
         self.id = str(uuid.uuid4())[:8]
-        self.internal_type = challenge_type
-        self.type = API_CHALLENGE_TYPES[challenge_type]
-        self.label = CHALLENGE_LABELS[challenge_type]
-        self.instruction = CHALLENGE_INSTRUCTIONS[challenge_type]
+        self.steps = tuple(challenge_steps)
         self.candidate = candidate
         self.reason = reason
         self.started_at = time.time()
         self.expires_at = self.started_at + CHALLENGE_TIMEOUT
         self.frames_processed = 0
         self.identity_frames = 0
-        self.blink_baseline = int(live.get("blinks", 0))
-        self.blink_detected = False
+        self.step_index = 0
+        self.awaiting_recenter = False
+        self.recenter_frames = 0
+        self.neutral_yaw_baseline: float | None = None
+        self.neutral_pitch_baseline: float | None = None
+        self.neutral_scale_baseline: float | None = None
         self.pose_baseline = None
+        self.pitch_baseline: float | None = None
+        self.mouth_baseline: float | None = None
+        self.scale_baseline: float | None = None
         self.pose_baseline_frames = 0
         self.pose_frames_passed = 0
 
@@ -91,14 +129,77 @@ class ActiveChallengeV4:
         return time.time() >= self.expires_at
 
     @property
-    def required_frames(self) -> int:
-        if self.internal_type == "BLINK":
+    def current_internal_type(self) -> str:
+        return self.steps[min(self.step_index, len(self.steps) - 1)]
+
+    @property
+    def display_internal_type(self) -> str:
+        if self.awaiting_recenter:
+            return "CENTER"
+        return self.current_internal_type
+
+    @property
+    def type(self) -> str:
+        return API_CHALLENGE_TYPES[self.display_internal_type]
+
+    @property
+    def label(self) -> str:
+        return CHALLENGE_LABELS[self.display_internal_type]
+
+    @property
+    def instruction(self) -> str:
+        return CHALLENGE_INSTRUCTIONS[self.display_internal_type]
+
+    @property
+    def total_steps(self) -> int:
+        return len(self.steps)
+
+    @property
+    def completed_steps(self) -> int:
+        return self.step_index + (1 if self.awaiting_recenter else 0)
+
+    @property
+    def step_number(self) -> int:
+        if self.total_steps <= 1:
             return 1
+        return min(
+            self.step_index + 1 + (1 if self.awaiting_recenter and self.step_index < self.total_steps - 1 else 0),
+            self.total_steps,
+        )
+
+    @property
+    def required_frames(self) -> int:
+        if self.awaiting_recenter:
+            return CHALLENGE_RECENTER_FRAMES
+        if self.current_internal_type == "OPEN_MOUTH":
+            return CHALLENGE_MOUTH_FRAMES
+        if self.current_internal_type == "CENTER_HOLD":
+            return CHALLENGE_CENTER_HOLD_FRAMES
         return CHALLENGE_POSE_FRAMES
 
     @property
     def text(self) -> str:
         return self.label
+
+    def reset_pose_tracking(self):
+        self.pose_baseline = None
+        self.pitch_baseline = None
+        self.mouth_baseline = None
+        self.scale_baseline = None
+        self.pose_baseline_frames = 0
+        self.pose_frames_passed = 0
+
+    def begin_recenter(self):
+        self.awaiting_recenter = True
+        self.recenter_frames = 0
+        self.reset_pose_tracking()
+
+    def advance_step(self):
+        self.awaiting_recenter = False
+        self.recenter_frames = 0
+        if self.step_index < self.total_steps - 1:
+            self.step_index += 1
+        self.reset_pose_tracking()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +208,10 @@ class ActiveChallengeV4:
             "label": self.label,
             "instruction": self.instruction,
             "candidate": self.candidate,
+            "step_number": self.step_number,
+            "step_total": self.total_steps,
+            "completed_steps": self.completed_steps,
+            "phase": "recenter" if self.awaiting_recenter else "action",
             "expires_in": round(max(0.0, self.expires_at - time.time()), 1),
             "remaining_ms": self.remaining_ms,
             "required_frames": self.required_frames,
@@ -414,27 +519,52 @@ class DetectV4RuntimeSession:
             return self._end_challenge("failed", "Screen detected during challenge")
 
         face_live = self.liveness.get_liveness(bbox)
-        completed = False
-        if challenge.internal_type == "BLINK":
-            completed = int(face_live.get("blinks", 0)) > challenge.blink_baseline
-            challenge.blink_detected = completed
-        else:
-            metrics = self.engine.get_face_metrics(frame, face)
-            completed = self._check_turn(challenge, float(metrics.get("nose_x_disp", 0.0)))
-
-        if completed:
-            return self._end_challenge_pass(frame, match, face, now, moire, face_live)
-        return [self._challenge_progress_event(
-            f"Keep going: {challenge.label}",
-            frame_size=self._frame_size(frame),
-            face_bbox=bbox,
-            liveness=face_live,
-            moire={
+        challenge_metrics = self.liveness.get_challenge_metrics(bbox)
+        metrics = self.engine.get_face_metrics(frame, face)
+        nose_x_disp = float(metrics.get("nose_x_disp", 0.0))
+        progress_extra = {
+            "frame_size": self._frame_size(frame),
+            "face_bbox": bbox,
+            "liveness": face_live,
+            "moire": {
                 **moire,
                 "decision": rolling.get("decision", moire.get("decision_hint", "")),
             },
-            moire_rolling=rolling,
-            moire_roi_bbox=moire_roi_bbox,
+            "moire_rolling": rolling,
+            "moire_roi_bbox": moire_roi_bbox,
+        }
+
+        if challenge.awaiting_recenter:
+            recentered = self._check_recenter(challenge, nose_x_disp, challenge_metrics)
+            if recentered:
+                challenge.advance_step()
+                return [self._challenge_progress_event(
+                    f"Step {challenge.step_number}/{challenge.total_steps}: {challenge.label}",
+                    **progress_extra,
+                )]
+            return [self._challenge_progress_event(
+                "Return to center before the next step",
+                **progress_extra,
+            )]
+
+        completed = self._check_action(
+            challenge,
+            nose_x_disp,
+            float(metrics.get("yaw_angle", 0.0)),
+            challenge_metrics,
+        )
+
+        if completed:
+            if challenge.step_index < challenge.total_steps - 1:
+                challenge.begin_recenter()
+                return [self._challenge_progress_event(
+                    "Step complete. Return to center",
+                    **progress_extra,
+                )]
+            return self._end_challenge_pass(frame, match, face, now, moire, face_live)
+        return [self._challenge_progress_event(
+            f"Keep going: {challenge.label}",
+            **progress_extra,
         )]
 
     def _moire_for_face(
@@ -462,10 +592,14 @@ class DetectV4RuntimeSession:
         diagnostics: dict[str, Any],
         reason: str,
     ) -> dict[str, Any]:
-        challenge_type = random.choice(CHALLENGE_TYPES)
-        self.active_challenge = ActiveChallengeV4(challenge_type, candidate, live, reason)
+        challenge_pool = SAFE_CHALLENGE_SEQUENCES or [(challenge,) for challenge in CHALLENGE_TYPES]
+        challenge_steps = tuple(random.choice(challenge_pool))
+        self.active_challenge = ActiveChallengeV4(challenge_steps, candidate, live, reason)
         self.last_challenge_student_id = candidate.get("student_id")
-        logger.info(f"Detect V4 challenge started: {challenge_type} for {candidate.get('student_id')}: {reason}")
+        logger.info(
+            f"Detect V4 challenge started: {' -> '.join(challenge_steps)} "
+            f"for {candidate.get('student_id')}: {reason}"
+        )
         return {
             "type": "challenge_required",
             "status": "challenge_required",
@@ -480,25 +614,121 @@ class DetectV4RuntimeSession:
             "fps": self._fps(),
         }
 
-    def _check_turn(self, challenge: ActiveChallengeV4, nose_x_disp: float) -> bool:
+    def _collect_action_baseline(
+        self,
+        challenge: ActiveChallengeV4,
+        nose_x_disp: float,
+        challenge_metrics: dict[str, Any],
+    ) -> bool:
+        pitch_value = float(challenge_metrics.get("pitch_value", 0.0))
+        mouth_ratio = float(challenge_metrics.get("mouth_ratio", 0.0))
+        face_scale = float(challenge_metrics.get("face_scale", 0.0))
+
+        challenge.pose_baseline = (
+            nose_x_disp
+            if challenge.pose_baseline is None
+            else challenge.pose_baseline * 0.7 + nose_x_disp * 0.3
+        )
+        challenge.pitch_baseline = (
+            pitch_value
+            if challenge.pitch_baseline is None
+            else challenge.pitch_baseline * 0.7 + pitch_value * 0.3
+        )
+        challenge.mouth_baseline = (
+            mouth_ratio
+            if challenge.mouth_baseline is None
+            else challenge.mouth_baseline * 0.8 + mouth_ratio * 0.2
+        )
+        challenge.scale_baseline = (
+            face_scale
+            if challenge.scale_baseline is None
+            else challenge.scale_baseline * 0.8 + face_scale * 0.2
+        )
+
+        if challenge.neutral_yaw_baseline is None:
+            challenge.neutral_yaw_baseline = challenge.pose_baseline
+        if challenge.neutral_pitch_baseline is None:
+            challenge.neutral_pitch_baseline = challenge.pitch_baseline
+        if challenge.neutral_scale_baseline is None:
+            challenge.neutral_scale_baseline = challenge.scale_baseline
+
+        challenge.pose_baseline_frames += 1
+        return challenge.pose_baseline_frames >= CHALLENGE_BASELINE_FRAMES
+
+    def _check_action(
+        self,
+        challenge: ActiveChallengeV4,
+        nose_x_disp: float,
+        yaw_angle: float,
+        challenge_metrics: dict[str, Any],
+    ) -> bool:
+        if not bool(challenge_metrics.get("available")) or int(challenge_metrics.get("lighting_cooldown", 0)) > 0:
+            challenge.pose_frames_passed = 0
+            return False
         if challenge.pose_baseline_frames < CHALLENGE_BASELINE_FRAMES:
-            challenge.pose_baseline = (
-                nose_x_disp
-                if challenge.pose_baseline is None
-                else challenge.pose_baseline * 0.7 + nose_x_disp * 0.3
-            )
-            challenge.pose_baseline_frames += 1
+            self._collect_action_baseline(challenge, nose_x_disp, challenge_metrics)
             return False
 
-        baseline = challenge.pose_baseline or 0.0
-        dx = nose_x_disp - baseline
-        if challenge.internal_type == "TURN_LEFT" and dx >= TURN_THRESHOLD:
-            challenge.pose_frames_passed += 1
-        elif challenge.internal_type == "TURN_RIGHT" and dx <= -TURN_THRESHOLD:
+        baseline_yaw = float(challenge.pose_baseline or 0.0)
+        baseline_pitch = float(challenge.pitch_baseline or 0.0)
+        baseline_mouth = float(challenge.mouth_baseline or 0.0)
+        baseline_scale = float(challenge.scale_baseline or 0.0)
+
+        pitch_value = float(challenge_metrics.get("pitch_value", 0.0))
+        mouth_ratio = float(challenge_metrics.get("mouth_ratio", 0.0))
+        face_scale = float(challenge_metrics.get("face_scale", 0.0))
+
+        dx = nose_x_disp - baseline_yaw
+        pitch_delta = pitch_value - baseline_pitch
+        mouth_delta = max(0.0, mouth_ratio - baseline_mouth)
+        scale_delta = 0.0
+        if baseline_scale > 1e-6:
+            scale_delta = abs((face_scale - baseline_scale) / baseline_scale)
+
+        action = challenge.current_internal_type
+        yaw_ok = abs(yaw_angle) >= CHALLENGE_MIN_YAW_ANGLE
+        valid = False
+        if action == "TURN_LEFT":
+            valid = dx >= TURN_THRESHOLD and yaw_ok
+        elif action == "TURN_RIGHT":
+            valid = dx <= -TURN_THRESHOLD and yaw_ok
+        elif action == "LOOK_UP":
+            valid = pitch_delta <= -LOOK_UP_THRESHOLD
+        elif action == "LOOK_DOWN":
+            valid = pitch_delta >= LOOK_DOWN_THRESHOLD
+        elif action == "OPEN_MOUTH":
+            valid = mouth_delta >= OPEN_MOUTH_DELTA or mouth_ratio >= OPEN_MOUTH_MIN_RATIO
+        elif action == "CENTER_HOLD":
+            valid = (
+                abs(nose_x_disp - baseline_yaw) <= CENTER_YAW_THRESHOLD
+                and abs(pitch_delta) <= CENTER_PITCH_THRESHOLD
+                and abs(yaw_angle) <= CHALLENGE_CENTER_MAX_YAW_ANGLE
+                and scale_delta <= CENTER_SCALE_DELTA
+            )
+
+        if valid:
             challenge.pose_frames_passed += 1
         else:
-            challenge.pose_frames_passed = max(0, challenge.pose_frames_passed - 1)
-        return challenge.pose_frames_passed >= CHALLENGE_POSE_FRAMES
+            challenge.pose_frames_passed = 0
+        return challenge.pose_frames_passed >= challenge.required_frames
+
+    def _check_recenter(
+        self,
+        challenge: ActiveChallengeV4,
+        nose_x_disp: float,
+        challenge_metrics: dict[str, Any],
+    ) -> bool:
+        neutral_yaw = float(challenge.neutral_yaw_baseline or 0.0)
+        neutral_pitch = float(challenge.neutral_pitch_baseline or 0.0)
+        pitch_value = float(challenge_metrics.get("pitch_value", 0.0))
+
+        yaw_centered = abs(nose_x_disp - neutral_yaw) <= CHALLENGE_RECENTER_THRESHOLD
+        pitch_centered = abs(pitch_value - neutral_pitch) <= CHALLENGE_RECENTER_PITCH_THRESHOLD
+        if yaw_centered and pitch_centered:
+            challenge.recenter_frames += 1
+        else:
+            challenge.recenter_frames = 0
+        return challenge.recenter_frames >= CHALLENGE_RECENTER_FRAMES
 
     def _end_challenge_pass(
         self,
@@ -575,10 +805,14 @@ class DetectV4RuntimeSession:
         status: str,
         feedback: str,
     ) -> dict[str, Any]:
-        collected = (
-            1 if challenge.internal_type == "BLINK" and challenge.blink_detected
-            else challenge.pose_frames_passed
-        )
+        if challenge.awaiting_recenter:
+            collected = challenge.recenter_frames
+            progress_ratio = challenge.completed_steps / max(challenge.total_steps, 1)
+        else:
+            collected = challenge.pose_frames_passed
+            progress_ratio = (
+                challenge.step_index + min(collected / max(challenge.required_frames, 1), 1.0)
+            ) / max(challenge.total_steps, 1)
         return {
             "id": challenge.id,
             "type": challenge.type,
@@ -586,8 +820,12 @@ class DetectV4RuntimeSession:
             "instruction": challenge.instruction,
             "status": status,
             "feedback": feedback,
+            "step_number": challenge.step_number,
+            "step_total": challenge.total_steps,
+            "completed_steps": challenge.completed_steps,
             "collected_frames": collected,
             "required_frames": challenge.required_frames,
+            "progress_pct": int(round(progress_ratio * 100)),
             "frames_processed": challenge.frames_processed,
             "identity_frames": challenge.identity_frames,
             "elapsed_ms": int(max(0.0, (time.time() - challenge.started_at) * 1000)),

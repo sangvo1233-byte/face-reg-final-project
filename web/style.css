@@ -1125,8 +1125,10 @@ tbody td strong {
 .scan-challenge-arrow { position: absolute; top: 0; right: 2px; font-size: 38px; color: #34c759; filter: drop-shadow(0 3px 10px rgba(52,199,89,0.35)); animation: posePulse 0.9s ease-in-out infinite; }
 .scan-challenge-action.left .scan-challenge-arrow { top: 18px; right: auto; left: -4px; animation-name: nudgeLeft; }
 .scan-challenge-action.right .scan-challenge-arrow { top: 18px; right: -4px; animation-name: nudgeRight; }
+.scan-challenge-action.up .scan-challenge-arrow { top: -4px; right: 6px; animation-name: nudgeUp; }
+.scan-challenge-action.down .scan-challenge-arrow { top: 28px; right: 6px; animation-name: nudgeDown; }
 .scan-challenge-action.front .scan-challenge-arrow { top: -4px; right: 6px; animation-name: nudgeUp; }
-.scan-challenge-action.blink .scan-challenge-arrow { top: 15px; right: -2px; color: #9ff0b2; animation-name: blinkCue; }
+.scan-challenge-action.mouth .scan-challenge-arrow { top: 15px; right: -2px; color: #9ff0b2; animation-name: mouthCue; }
 .scan-challenge-body { width: 100%; text-align: center; }
 .scan-challenge-title { margin: 0; color: #fff; font-size: 1.08rem; font-weight: 760; letter-spacing: -0.02em; }
 .scan-challenge-instruction { margin: 5px 0 0; color: rgba(255,255,255,0.78); font-size: 0.78rem; font-weight: 650; }
@@ -1146,7 +1148,8 @@ tbody td strong {
 @keyframes nudgeLeft { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-8px); } }
 @keyframes nudgeRight { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(8px); } }
 @keyframes nudgeUp { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-@keyframes blinkCue { 0%, 100% { transform: scaleY(1); opacity: 1; } 45%, 55% { transform: scaleY(0.45); opacity: 0.72; } }
+@keyframes nudgeDown { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(6px); } }
+@keyframes mouthCue { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.08); opacity: 0.78; } }
 
 /* Nav icon sizing */
 .nav-icon { font-size: 20px; }
