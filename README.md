@@ -1,119 +1,86 @@
 # Face Attendance System
 
-Real-time face attendance system built with FastAPI, InsightFace ArcFace embeddings, SQLite, and a vanilla JavaScript web dashboard. The current production web flow uses multi-angle enrollment, Scan V3 recognition, WebSocket streaming liveness, passive anti-spoofing, and active challenge verification for suspicious scans.
+Real-time face attendance system built with FastAPI, InsightFace ArcFace embeddings, MediaPipe-based stream liveness, SQLite, and a vanilla JavaScript dashboard.
+
+The current default web runtime is Detect V4.4. It supports:
+
+- `Auto` scan mode selection on the dashboard
+- `Browser Stream` scanning over `ws://.../ws/scan-v4`
+- `Local Direct` scanning from the server webcam over `ws://.../ws/scan-v4/local`
+- multi-angle enrollment with `front`, `left`, and `right` capture
+- layered anti-spoofing with moire detection, screen-context checks, phone-rectangle checks, passive liveness, stream liveness, and active challenge fallback
+
+Detect V3 and legacy V1 routes are still present for compatibility and comparison, but the current UI is wired around V4.4.
 
 ---
 
-## Overview
+## Current Runtime Summary
 
-The project has two main usage paths:
+| Runtime | Main routes | Purpose | Status |
+|---|---|---|---|
+| Detect V4.4 | `/ws/scan-v4`, `/api/scan/v4`, `/ws/scan-v4/local` | Current production scan pipeline | Default |
+| Detect V3 | `/ws/scan-v3`, `/api/scan/v3`, `/api/scan/v3/challenge` | Older strict + challenge path | Compatibility |
+| Legacy V1 | `/api/scan`, `/api/enroll` | Baseline single-frame flow | Legacy |
+| `dev/` scripts | `dev/detect-v*.py`, `dev/enroll-v*.py` | Research and iteration history | Experimental |
 
-| Path | Purpose | Status |
-|---|---|---|
-| Web dashboard | Production-oriented attendance UI and API workflow | Primary |
-| `dev/` scripts | Standalone research and debugging tools | Reference / experimental |
+The dashboard scan-mode selector uses three frontend modes:
 
-The web dashboard is the current default path. It uses:
+- `auto`: chooses `local_direct` when the page is opened on localhost/private LAN and the server camera is available; otherwise falls back to `browser_ws`
+- `local_direct`: server webcam drives Detect V4.4 through `core/local_runner_v4.py`
+- `browser_ws`: this browser camera sends JPEG frames to `/ws/scan-v4`
 
-- `/api/enroll/v2` for camera/manual multi-angle enrollment.
-- `/ws/scan-v3` for default browser-camera attendance scanning with continuous liveness tracking.
-- `/api/scan/v3` for compatibility single-frame scanning.
-- `/api/scan/v3/challenge` for suspicious-frame active verification.
-- Modular frontend files under `web/js/`.
+The `/phone` page and `/ws/phone-camera` transport are still available, but they are not the default Detect V4.4 dashboard path.
 
 ---
 
-## Production Web Flow
+## Feature Highlights
+
+- FastAPI backend with static dashboard served from `web/`
+- SQLite student/session/attendance storage
+- InsightFace face detection and 512-d ArcFace embeddings
+- multi-angle V2 enrollment with per-angle validation
+- Detect V4.4 backend-owned scan runtime shared by browser stream and local-direct modes
+- random active challenge fallback with `blink`, `turn_left`, and `turn_right`
+- attendance success overlay and in-camera challenge overlay
+- debug "Tech Overlay" for runtime geometry and diagnostics
+- student archive/restore flow with photo and evidence endpoints
+- health, readiness, version, and capability endpoints for deployment checks
+
+---
+
+## Detect V4.4 Pipeline
 
 ```text
-Browser camera frame stream over WebSocket
-  -> MediaPipe FaceLandmarker Tasks API liveness on every frame
-  -> InsightFace face detection at 10 FPS
-  -> Match liveness track back to each detected bbox
-  -> ArcFace embedding extraction
-  -> Rolling moire score check every 3 detect cycles
-  -> Passive liveness score check
-  -> If no blink after timeout: block as spoof
-  -> Cosine match against active embeddings
-  -> If clean: mark attendance
-  -> If suspicious: create active challenge
-  -> If challenge passes: mark attendance
+Browser camera or server webcam frame
+  -> InsightFace face detect + embedding
+  -> Streaming liveness tracker
+  -> Rolling moire detector
+  -> Screen-context detector
+  -> Phone-rectangle detector
+  -> Passive liveness check
+  -> ArcFace match at V4 threshold
+  -> If suspicious after identity match: start active challenge
+  -> If challenge passes or no challenge needed: record attendance
 ```
 
-Challenge is only triggered for suspicious-but-not-hard-blocked scans. A hard spoof signal is blocked before matching. A clean real face should pass directly without challenge.
+### What V4.4 adds compared with V3
 
-Current challenge actions:
+- Detect V4.4 is transport-agnostic: both browser-stream and local-direct modes feed the same backend runtime in `core/runtime_v4.py`
+- moire decisions use the V4 detector in `core/detect_v4.py`
+- screen-context analysis is enabled
+- phone-rectangle analysis is enabled, including rolling decisions across frames
+- challenge handling lives inside the runtime session instead of relying on a separate client-driven verification loop
+- the frontend can render debug geometry from runtime diagnostics using the "Tech Overlay" toggle
 
-| Action | Backend signal |
-|---|---|
-| `turn_left` | InsightFace 5-point landmark nose displacement |
-| `turn_right` | InsightFace 5-point landmark nose displacement |
-| `blink` | MediaPipe FaceMesh EAR across multiple browser frames |
+### Active challenge behavior
 
-Not implemented in production web yet: smile, nod, wink, multi-step challenge sequences.
+V4.4 only starts a challenge after a matched identity looks suspicious. Current challenge types:
 
----
+- `blink`
+- `turn_left`
+- `turn_right`
 
-## Web Features
-
-### Dashboard
-
-- Start and end attendance sessions.
-- Camera source selection: browser camera for live Scan V3, plus server webcam, phone camera, and demo video utilities.
-- Auto scan using continuous WebSocket Scan V3.
-- Attendance log showing student names, IDs, and classes.
-- In-camera success confirmation overlay with face evidence, student info, confidence, session, and countdown.
-- In-camera challenge overlay with action cue for left/right/blink.
-
-### Enrollment
-
-- Browser-camera-first enrollment.
-- Manual upload fallback.
-- V2 multi-angle flow: front, left, right.
-- Per-angle validation through `/api/enroll/v2/validate`.
-- Multi-frame capture per angle.
-- All-or-nothing save: all three angles must pass before replacing embeddings.
-- Re-enrollment updates metadata and replaces embeddings transactionally.
-
-### Students
-
-- Active / Archived views.
-- Student detail modal.
-- Edit name and class.
-- Re-enroll face data.
-- Archive and restore students.
-- Student photo endpoint with path traversal protection.
-
-### History
-
-- Session list.
-- Session result detail from `/api/session/{id}/result`.
-- Present/absent breakdown based on the session student snapshot.
-
----
-
-## Anti-Spoofing
-
-Production web anti-spoofing is implemented in layers:
-
-| Layer | File | Purpose |
-|---|---|---|
-| Moire FFT | `core/moire.py` | Detect screen replay artifacts |
-| Streaming liveness | `core/liveness.py` | Dev-style continuous EAR blink and movement verification |
-| Passive liveness | `core/anti_spoof.py` | Texture, reflection, and color heuristics |
-| Active challenge | `core/challenge_v3.py` | Require left/right/blink response when suspicious |
-| Scan orchestration | `core/detect_v3.py` | Decide pass, block, challenge, or unknown |
-
-Current decision bands are configured in `config.py`:
-
-```python
-DETECT_V3_MOIRE_BLOCK_THRESHOLD = 0.25
-DETECT_V3_MOIRE_CHALLENGE_THRESHOLD = 0.42
-DETECT_V3_LIVENESS_BLOCK_THRESHOLD = 0.32
-DETECT_V3_LIVENESS_CHALLENGE_THRESHOLD = 0.50
-```
-
-The standalone research scripts in `dev/` contain additional challenge ideas such as smile, nod, and wink. Production web now uses the same core browser stream shape as `dev/detect-v3.py`: continuous FaceLandmarker blink tracking, bbox-aware liveness lookup, 10 FPS recognition cadence, and rolling moire. It still intentionally limits active challenge actions to blink, turn left, and turn right.
+Current challenge state is in-memory and process-local.
 
 ---
 
@@ -122,108 +89,141 @@ The standalone research scripts in `dev/` contain additional challenge ideas suc
 ```text
 face-reg-finnal-project/
 |
-|-- main.py                       FastAPI entry point
-|-- config.py                     Paths, thresholds, server config
-|-- requirements.txt              Python dependencies
-|-- start_tunnel.bat              Cloudflare tunnel helper
+|-- main.py
+|-- config.py
+|-- requirements.txt
+|-- README.md
+|-- REPORT_DETECT_V4_4_VI.md
+|-- REPORT_DETECT_V4_4_VI.pdf
+|-- start_tunnel.bat
 |
 |-- app/
 |   |-- routes/
-|       |-- attendance.py         Sessions, legacy /api/scan
-|       |-- enrollment.py         V1 enroll, students CRUD, photo/evidence
-|       |-- enrollment_v2.py      V2 multi-angle enrollment endpoints
-|       |-- live.py               Server webcam MJPEG stream
-|       |-- phone_camera.py       Phone camera WebSocket + MJPEG stream
-|       |-- scan_v3.py            Scan V3 and challenge endpoints
-|       |-- system.py             System status and capabilities
-|       |-- __init__.py           Route aggregation
+|       |-- attendance.py
+|       |-- enrollment.py
+|       |-- enrollment_v2.py
+|       |-- live.py
+|       |-- local_scan.py
+|       |-- phone_camera.py
+|       |-- scan_v3.py
+|       |-- scan_v4.py
+|       |-- system.py
+|       |-- __init__.py
 |
 |-- core/
-|   |-- anti_spoof.py             Passive liveness heuristics
-|   |-- camera.py                 Server webcam wrapper
-|   |-- challenge_v3.py           Active challenge verification
-|   |-- database.py               SQLite data access and transactions
-|   |-- detect_v3.py              Scan V3 orchestration
-|   |-- enrollment_v2.py          Multi-angle enrollment service
-|   |-- face_engine.py            InsightFace detection, embeddings, matching
-|   |-- liveness.py               MediaPipe blink/movement liveness trackers
-|   |-- moire.py                  FFT moire detector
-|   |-- schemas.py                Dataclass result models
-|   |-- stream_scan_v3.py         WebSocket Scan V3 stream session
+|   |-- anti_spoof.py
+|   |-- camera.py
+|   |-- challenge_v3.py
+|   |-- database.py
+|   |-- detect_v3.py
+|   |-- detect_v4.py
+|   |-- enrollment_v2.py
+|   |-- face_engine.py
+|   |-- liveness.py
+|   |-- local_runner.py
+|   |-- local_runner_v4.py
+|   |-- moire.py
+|   |-- runtime_v3.py
+|   |-- runtime_v4.py
+|   |-- schemas.py
+|   |-- stream_scan_v3.py
+|   |-- stream_scan_v4.py
 |
 |-- web/
-|   |-- index.html                Main dashboard
-|   |-- style.css                 Dashboard styles
-|   |-- phone.html                Phone camera client
-|   |-- phone.js                  Phone WebSocket camera sender
-|   |-- phone_style.css           Phone client styles
+|   |-- index.html
+|   |-- phone.html
+|   |-- style.css
+|   |-- phone.js
+|   |-- phone_style.css
 |   |-- js/
-|       |-- api.js                Fetch wrapper
-|       |-- enrollment.js         V2 camera/manual enrollment UI
-|       |-- history.js            Session history UI
-|       |-- main.js               Frontend module entry
-|       |-- scan.js               Camera source, Scan V3, challenge, success overlay
-|       |-- session.js            Start/end session UI
-|       |-- state.js              Shared frontend state
-|       |-- students.js           Students CRUD UI
-|       |-- ui.js                 Theme, tabs, toast, modal helpers
+|       |-- api.js
+|       |-- enrollment.js
+|       |-- history.js
+|       |-- main.js
+|       |-- scan.js
+|       |-- session.js
+|       |-- state.js
+|       |-- students.js
+|       |-- ui.js
 |
 |-- dev/
-|   |-- README.md                 Research notes
-|   |-- enroll.py                 Standalone V1 enrollment
-|   |-- enroll-v2.py              Standalone V2 multi-angle enrollment
-|   |-- detect.py                 Standalone V1 detection
-|   |-- detect-v2.py              Standalone V2 detection research
-|   |-- detect-v3.py              Standalone V3 detection research
+|   |-- README.md
+|   |-- detect-v1.py
+|   |-- detect-v2.py
+|   |-- detect-v3.py
+|   |-- detect-v4.0.py
+|   |-- detect-v4.1.py
+|   |-- detect-v4.2.py
+|   |-- detect-v4.3.py
+|   |-- detect-v4.4.py
+|   |-- enroll-v1.py
+|   |-- enroll-v2.py
 |
 |-- tests/
-|   |-- run_test.py               Test runner
-|   |-- test_core.py              Core smoke tests
-|   |-- test_v2_v3.py             V2/V3 API and service tests
+|   |-- run_test.py
+|   |-- test_core.py
+|   |-- test_detect_v4.py
+|   |-- test_v2_v3.py
 |
-|-- models/                       InsightFace models are auto-downloaded here
-|-- database/                     Runtime SQLite DB and backups
-|-- logs/                         Runtime evidence images and face crops
+|-- models/
+|-- database/
+|-- logs/
 ```
 
-`web/app.js` may still exist as legacy code, but the dashboard entry point is `web/js/main.js`.
+Runtime data is stored in:
+
+- `database/attendance.db`
+- `database/backups/`
+- `logs/evidence/`
+- `logs/face_crops/`
+
+---
+
+## Requirements
+
+- Python 3.10 or newer
+- Conda or virtualenv recommended
+- modern browser with camera permission
+- optional NVIDIA GPU for faster ONNX inference
+
+Python 3.10+ is required because the codebase uses modern type syntax such as `str | None`.
 
 ---
 
 ## Installation
 
-### Requirements
-
-- Python 3.9 or higher.
-- Conda environment recommended.
-- CUDA-capable NVIDIA GPU recommended, but CPU can run for development.
-- Modern browser with camera permissions for browser-camera enrollment/scan.
-
-### Setup
+### 1. Create an environment
 
 ```bash
-conda create -n face-att python=3.10
+conda create -n face-att python=3.11
 conda activate face-att
+```
+
+### 2. Install Python dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-For GPU acceleration, install an appropriate `onnxruntime-gpu` build instead of CPU-only `onnxruntime`.
+### 3. Prepare models
 
-### MediaPipe Notes
+InsightFace uses `models/` as its model root. The project also expects:
 
-Production streaming liveness uses MediaPipe FaceLandmarker Tasks API from the `mediapipe` package.
+- `models/face_landmarker.task` for stream liveness
 
-`models/face_landmarker.task` is required for `/ws/scan-v3` streaming liveness, the optional `MultiFrameLiveness` path, and the research scripts in `dev/`.
-
-Optional FaceLandmarker download:
+Optional download:
 
 ```bash
-curl -o models/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+curl.exe -L -o models/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
 ```
+
+If you want GPU inference, install a matching `onnxruntime-gpu` build instead of CPU-only `onnxruntime`.
 
 ---
 
-## Running
+## Running The App
+
+Start the FastAPI server:
 
 ```bash
 python main.py
@@ -232,7 +232,7 @@ python main.py
 Open:
 
 ```text
-http://localhost:8000
+http://localhost:8000/
 ```
 
 Phone camera page:
@@ -241,180 +241,205 @@ Phone camera page:
 http://localhost:8000/phone
 ```
 
-Cloudflare tunnel:
+Useful health endpoints:
+
+- `GET /health`
+- `GET /ready`
+- `GET /version`
+- `GET /api/system/status`
+- `GET /api/system/capabilities`
+
+Interactive API docs are available at `/docs` when `API_DOCS_ENABLED=true`.
+
+### Cloudflare tunnel
 
 ```bash
 start_tunnel.bat
 ```
 
-Or manually:
+or:
 
 ```bash
 cloudflared tunnel --url http://localhost:8000
 ```
 
-When using Cloudflare, browser camera permissions require HTTPS, so the tunnel URL is useful for camera testing.
+This is useful when camera permissions require HTTPS on a remote device.
 
 ---
 
-## API Reference
+## API Summary
 
-### Sessions
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `POST` | `/api/session/start` | Start active session |
-| `POST` | `/api/session/end` | End active session and compute summary |
-| `GET` | `/api/session/active` | Get current active session |
-| `GET` | `/api/session/{session_id}/result` | Session present/absent detail |
-| `GET` | `/api/sessions` | List sessions |
-| `GET` | `/api/session/attendance` | Current session attendance |
-
-### Students
+### Session endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/api/students?view=active|archived|all` | List students by status |
-| `GET` | `/api/students/{student_id}` | Student detail, embedding count, history |
-| `PUT` | `/api/students/{student_id}` | Update name/class metadata |
-| `DELETE` | `/api/students/{student_id}` | Archive student, preserve embeddings |
+| `POST` | `/api/session/start` | Start a session |
+| `POST` | `/api/session/end` | End the active session |
+| `GET` | `/api/session/active` | Get the current active session |
+| `GET` | `/api/session/{session_id}/result` | Get present/absent results for a session |
+| `GET` | `/api/sessions` | List past sessions |
+| `GET` | `/api/session/attendance` | Get current-session attendance list |
+
+### Student endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/students?view=active|archived|all` | List students |
+| `GET` | `/api/students/{student_id}` | Student details, embedding count, history |
+| `PUT` | `/api/students/{student_id}` | Update name or class |
+| `DELETE` | `/api/students/{student_id}` | Archive student |
 | `POST` | `/api/students/{student_id}/restore` | Restore archived student |
-| `GET` | `/api/students/{student_id}/photo` | Serve student face crop |
+| `GET` | `/api/students/{student_id}/photo` | Serve stored face crop |
 | `GET` | `/api/evidence/{filename}` | Serve attendance evidence image |
 
-### Enrollment
+### Enrollment endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `POST` | `/api/enroll` | Legacy V1 single-image enrollment |
-| `POST` | `/api/enroll/v2` | V2 front/left/right multi-angle enrollment |
-| `POST` | `/api/enroll/v2/validate` | Validate one angle image before save |
+| `POST` | `/api/enroll` | Legacy single-image enrollment |
+| `POST` | `/api/enroll/v2` | Multi-angle enrollment with front/left/right images |
+| `POST` | `/api/enroll/v2/validate` | Validate one angle before saving |
 
-### Scan
+### Detect V4.4 endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/scan/v4` | Single-frame V4 compatibility scan |
+| `WS` | `/ws/scan-v4` | Default browser-camera V4 stream |
+| `POST` | `/api/scan/v4/local/start` | Start server-webcam local-direct V4 runner |
+| `POST` | `/api/scan/v4/local/stop` | Stop local-direct V4 runner |
+| `GET` | `/api/scan/v4/local/status` | Get local-direct V4 status |
+| `WS` | `/ws/scan-v4/local` | Subscribe to local-direct V4 events |
+
+### Compatibility endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `POST` | `/api/scan` | Legacy V1 scan |
-| `POST` | `/api/scan/v3` | Compatibility single-frame Scan V3 API |
-| `WS` | `/ws/scan-v3` | Default browser-camera Scan V3 stream with stateful liveness |
-| `POST` | `/api/scan/v3/challenge` | Verify suspicious scan with frame batch |
+| `POST` | `/api/scan/v3` | Single-frame Detect V3 scan |
+| `WS` | `/ws/scan-v3` | Detect V3 browser stream |
+| `POST` | `/api/scan/v3/challenge` | Verify V3 challenge frames |
+| `POST` | `/api/scan/v3/local/start` | Start V3 local-direct runner |
+| `POST` | `/api/scan/v3/local/stop` | Stop V3 local-direct runner |
+| `GET` | `/api/scan/v3/local/status` | Get V3 local-direct status |
+| `WS` | `/ws/scan-v3/local` | Subscribe to V3 local-direct events |
 
-### Camera / System
+### Camera and system endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/api/live/stream` | Server webcam MJPEG stream |
-| `GET` | `/api/live/phone-stream` | Phone camera MJPEG stream |
-| `GET` | `/api/phone/status` | Phone camera connection status |
-| `GET` | `/api/phone/latest` | Latest phone frame if fresh |
-| `WS` | `/ws/phone-camera` | Phone camera frame upload |
-| `GET` | `/api/system/status` | Runtime status |
-| `GET` | `/api/system/capabilities` | API versions and feature flags |
+| `GET` | `/api/live/phone-stream` | MJPEG stream from phone uploader |
+| `GET` | `/api/phone/status` | Phone transport status |
+| `GET` | `/api/phone/latest` | Latest phone frame |
+| `WS` | `/ws/phone-camera` | Phone frame upload transport |
+| `GET` | `/api/system/status` | Runtime system summary |
+| `GET` | `/api/system/capabilities` | API versions, modes, and thresholds |
 
 ---
 
 ## Configuration
 
-All main settings live in `config.py`.
+Configuration is split across two places:
 
-| Parameter | Default | Purpose |
+- `config.py` for app paths, server flags, camera options, enrollment rules, and shared V3 stream settings
+- `core/detect_v4.py` for Detect V4.4 scoring thresholds and detector constants
+
+### Common app settings in `config.py`
+
+| Setting | Default | Purpose |
 |---|---:|---|
-| `COSINE_THRESHOLD` | `0.45` | Legacy/default match threshold |
-| `DETECT_V3_COSINE_THRESHOLD` | `0.52` | Scan V3 strict match threshold |
-| `DETECT_V3_MOIRE_SCREEN_THRESHOLD` | `0.30` | Legacy moire screen threshold |
-| `DETECT_V3_MOIRE_BLOCK_THRESHOLD` | `0.25` | Hard block if moire score is lower |
-| `DETECT_V3_MOIRE_CHALLENGE_THRESHOLD` | `0.42` | Challenge if moire score is below this band |
-| `DETECT_V3_LIVENESS_BLOCK_THRESHOLD` | `0.32` | Hard block if passive liveness is lower |
-| `DETECT_V3_LIVENESS_CHALLENGE_THRESHOLD` | `0.50` | Challenge if passive liveness is below this band |
-| `DETECT_V3_CHALLENGE_TTL_SECONDS` | `10` | Challenge expiry window |
-| `DETECT_V3_CHALLENGE_MIN_FRAMES` | `3` | Minimum challenge frames |
-| `DETECT_V3_CHALLENGE_MAX_FRAMES` | `36` | Maximum challenge frames analyzed |
-| `DETECT_V3_BLINK_EAR_CLOSED_THRESHOLD` | `0.21` | Blink closed-eye EAR threshold |
-| `DETECT_V3_BLINK_EAR_OPEN_THRESHOLD` | `0.24` | Blink open-eye EAR threshold |
-| `DETECT_V3_STREAM_TARGET_FPS` | `10` | Browser frame send target for `/ws/scan-v3` |
-| `DETECT_V3_STREAM_DETECT_FPS` | `10` | Max recognition checks per second in the stream |
-| `DETECT_V3_STREAM_MOIRE_EVERY_N_DETECT` | `3` | Run rolling moire analysis every N detect cycles |
-| `DETECT_V3_STREAM_CLIENT_FRAME_WIDTH` | `960` | Browser frame max width for WebSocket scan |
-| `DETECT_V3_STREAM_CLIENT_JPEG_QUALITY` | `0.82` | Browser JPEG quality target for WebSocket scan |
-| `DETECT_V3_STREAM_MIN_TRACK_SECONDS` | `2.0` | Minimum stream observation time before requiring blink |
-| `DETECT_V3_STREAM_MAX_CHECK_SECONDS` | `6.0` | Max time to wait for blink before spoof result |
-| `ENROLL_V2_BLUR_MIN` | `80.0` | Minimum blur/quality score per angle |
-| `ENROLL_V2_POSE_FRONT_MAX_DISP` | `0.12` | Max nose displacement for front |
-| `ENROLL_V2_POSE_TURN_THRESHOLD` | `0.04` | Min displacement for left/right |
-| `CAMERA_SOURCE` | `0` | Server webcam index or camera source |
-| `HOST` | `0.0.0.0` | Server bind address |
-| `PORT` | `8000` | Server port |
+| `APP_VERSION` | `4.4.0` | App version reported by `/version` |
+| `HOST` | `0.0.0.0` | Uvicorn bind host |
+| `PORT` | `8000` | Uvicorn bind port |
+| `AUTO_PRELOAD_MODELS` | `True` | Warm up face engine during startup |
+| `AUTO_LOAD_EMBEDDING_CACHE` | `True` | Load student embeddings during warmup |
+| `AUTO_START_CAMERA` | `True` | Start server webcam on boot |
+| `CAMERA_REQUIRED` | `False` | Mark camera failure as fatal when true |
+| `UVICORN_RELOAD` | `DEBUG` | Enable hot reload in development |
+| `API_DOCS_ENABLED` | `DEBUG` | Expose `/docs`, `/redoc`, and `/openapi.json` |
+| `CAMERA_SOURCE` | `0` | Server webcam source |
+| `DETECT_V3_STREAM_ENABLED` | `True` | Enable websocket streaming scan routes |
+| `DETECT_V3_STREAM_TARGET_FPS` | `10` | Browser frame send target |
+| `DETECT_V3_STREAM_DETECT_FPS` | `10` | Backend detect cadence |
+| `ENROLL_V2_BLUR_MIN` | `80.0` | Minimum blur quality for enrollment |
+| `ENROLL_V2_POSE_FRONT_MAX_DISP` | `0.12` | Max front nose displacement |
+| `ENROLL_V2_POSE_TURN_THRESHOLD` | `0.04` | Min turn displacement for left/right |
 
----
+### Detect V4.4 thresholds in `core/detect_v4.py`
 
-## Development / Research Tools
+| Setting | Default | Purpose |
+|---|---:|---|
+| `V4_COSINE_THRESHOLD` | `0.52` | V4 face-match threshold |
+| `MOIRE_SCREEN_THRESHOLD` | `0.60` | Suspicious moire threshold |
+| `MOIRE_BLOCK_THRESHOLD` | `0.45` | Hard screen block threshold |
+| `SCREEN_CONTEXT_WEIGHT` | `0.35` | Weight for context scoring |
+| `SCREEN_CONTEXT_STRONG_THRESHOLD` | `0.78` | Strong screen-context trigger |
+| `PHONE_RECT_CONTEXT_SCALE` | `2.80` | ROI expansion around face |
+| `PHONE_RECT_VERTICAL_RATIO` | `1.6` | Portrait-style ROI ratio |
+| `PHONE_RECT_SUSPICIOUS_THRESHOLD` | `0.38` | Suspicious phone-rectangle threshold |
+| `PHONE_RECT_STRONG_THRESHOLD` | `0.58` | Strong phone-rectangle threshold |
 
-The `dev/` scripts are standalone tools and may contain research features not yet integrated into the web production path.
-
-### Enrollment Scripts
-
-| Script | Method | Notes |
-|---|---|---|
-| `python dev/enroll.py` | Single image | V1 baseline |
-| `python dev/enroll-v2.py` | Front/left/right multi-angle | Research/reference for V2 flow |
-
-### Detection Scripts
-
-| Script | Anti-spoofing | Notes |
-|---|---|---|
-| `python dev/detect.py` | Basic liveness | V1 baseline |
-| `python dev/detect-v2.py` | Moire + active challenge research | Experimental |
-| `python dev/detect-v3.py` | Moire + challenge + stricter threshold | Research/reference |
-
-Do not assume every `dev/` feature is active in the web API. The production web integration is defined by `core/detect_v3.py` and `core/challenge_v3.py`.
+If you change V4 behavior, update both the code and this README so the documented thresholds stay honest.
 
 ---
 
 ## Testing
 
-Run JavaScript syntax checks:
+Run focused Detect V4.4 tests:
 
 ```bash
-node --check web/js/api.js
-node --check web/js/state.js
-node --check web/js/ui.js
-node --check web/js/session.js
-node --check web/js/students.js
-node --check web/js/enrollment.js
-node --check web/js/history.js
-node --check web/js/scan.js
-node --check web/js/main.js
+python -m pytest tests/test_detect_v4.py -q
 ```
 
-Run focused V2/V3 tests:
+Run V2/V3 tests:
 
 ```bash
 python -m pytest tests/test_v2_v3.py -q
 ```
 
-Run full tests:
+Run the full test suite:
 
 ```bash
 python -m pytest tests -q
 ```
 
-Manual browser smoke test:
+Run the legacy smoke runner that writes to `tests/test_result.txt`:
 
-- Hard refresh the dashboard with `Ctrl + F5`.
-- Start a session.
-- Enroll a student through browser camera.
-- Scan through the web UI using `/ws/scan-v3`.
-- Verify success overlay appears inside the camera frame.
-- Verify default web scan asks for blink/liveness before marking attendance.
-- Test suspicious conditions and verify challenge overlay for left/right/blink.
-- End session and inspect history details.
+```bash
+python tests/run_test.py
+```
+
+Optional frontend syntax check if Node.js is available:
+
+```bash
+node --check web/js/main.js
+node --check web/js/scan.js
+node --check web/js/enrollment.js
+```
+
+### Manual smoke checklist
+
+- start a session from the dashboard
+- enroll a student with the V2 front/left/right flow
+- verify `Auto` picks the expected scan mode
+- test `Browser Stream` on a remote browser
+- test `Local Direct` on the machine that has the webcam attached
+- verify attendance success overlay and challenge overlay both render
+- toggle the `Tech Overlay` and confirm geometry/diagnostics appear
+- end the session and inspect history details
 
 ---
 
 ## Known Limitations
 
-- Challenge state is in-memory and process-local. Multiple FastAPI workers would require Redis or another shared store.
-- Blink challenge uses regular 2D webcam frames. It improves replay resistance but is not equivalent to hardware depth sensing.
-- Streaming/passive liveness thresholds require real camera tuning. Poor lighting, compression, or reflective glasses can still cause false rejects.
-- Browser WebSocket scan depends on camera permission and network latency. Cloudflare tunnels can reduce effective FPS; the frontend uses backpressure to avoid flooding. Phone camera is not the default Scan V3 path.
-- Some comments in older source files may contain mojibake from prior encoding issues; runtime behavior is unaffected.
+- challenge state is in-memory and process-local, so multiple app workers would need shared state
+- thresholds still need real-camera tuning for lighting, compression, and replay conditions
+- `Local Direct` only makes sense when the camera is physically attached to the server machine
+- V3 and V4 coexist in the codebase, so route coverage is broader than the default UI path
+- runtime data under `database/`, `logs/`, and `models/` can grow quickly during testing
+
+For implementation details behind Detect V4.4, see:
+
+- `REPORT_DETECT_V4_4_VI.md`
+- `REPORT_DETECT_V4_4_VI.pdf`
