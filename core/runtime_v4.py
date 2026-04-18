@@ -34,6 +34,7 @@ from core.detect_v4 import (
     CENTER_SCALE_DELTA,
     CENTER_YAW_THRESHOLD,
     LOOK_DOWN_THRESHOLD,
+    LOOK_PITCH_CENTER_YAW_THRESHOLD,
     LOOK_UP_THRESHOLD,
     MOIRE_BLOCK_THRESHOLD,
     MOIRE_EVERY_N_DETECT,
@@ -48,8 +49,8 @@ from core.detect_v4 import (
     RollingMoireDecision,
     RollingPhoneRectDecision,
     ScreenContextDetectorV41,
+    assess_challenge_need,
     bbox_list,
-    collect_suspicious_reasons,
     expanded_roi,
     get_detect_v4_service,
     passive_decision,
@@ -85,12 +86,18 @@ CHALLENGE_INSTRUCTIONS = {
     "LOOK_DOWN": "Lower your chin and LOOK DOWN",
     "OPEN_MOUTH": "Open your mouth clearly",
 }
-SAFE_CHALLENGE_SEQUENCES = [
+MEDIUM_CHALLENGE_SEQUENCES = [
     ("TURN_LEFT", "OPEN_MOUTH"),
-    ("TURN_RIGHT", "LOOK_UP"),
-    ("LOOK_DOWN", "TURN_LEFT"),
-    ("LOOK_UP", "OPEN_MOUTH"),
+    ("TURN_RIGHT", "OPEN_MOUTH"),
+    ("LOOK_UP", "TURN_LEFT"),
+    ("LOOK_UP", "TURN_RIGHT"),
+]
+STRONG_CHALLENGE_SEQUENCES = [
+    *MEDIUM_CHALLENGE_SEQUENCES,
     ("CENTER_HOLD", "TURN_RIGHT"),
+    ("TURN_RIGHT", "LOOK_UP"),
+    ("LOOK_UP", "OPEN_MOUTH"),
+    ("LOOK_DOWN", "TURN_LEFT"),
     ("LOOK_DOWN", "OPEN_MOUTH"),
 ]
 CHALLENGE_RECENTER_THRESHOLD = 0.035
@@ -449,7 +456,7 @@ class DetectV4RuntimeSession:
             emb_count=emb_count,
             bbox=bbox,
         )
-        suspicious_reasons = collect_suspicious_reasons(
+        challenge_assessment = assess_challenge_need(
             moire_decision=moire_decision,
             screen_context=screen_context,
             phone_rect=phone_rect,
@@ -458,8 +465,14 @@ class DetectV4RuntimeSession:
             passive_score=float(passive.score),
             challenge_fail_count=self.challenge_fail_count,
         )
-        if suspicious_reasons and not self._challenge_passed_valid(now, match.student_id):
-            return self._start_challenge(candidate, face_live, diagnostics, "; ".join(suspicious_reasons))
+        if challenge_assessment["should_challenge"] and not self._challenge_passed_valid(now, match.student_id):
+            return self._start_challenge(
+                candidate,
+                face_live,
+                diagnostics,
+                "; ".join(challenge_assessment["reasons"]),
+                challenge_assessment["severity"],
+            )
 
         result = self.service.record_attendance_result(
             frame=frame,
@@ -591,13 +604,19 @@ class DetectV4RuntimeSession:
         live: dict[str, Any],
         diagnostics: dict[str, Any],
         reason: str,
+        severity: str,
     ) -> dict[str, Any]:
-        challenge_pool = SAFE_CHALLENGE_SEQUENCES or [(challenge,) for challenge in CHALLENGE_TYPES]
+        challenge_pool = (
+            STRONG_CHALLENGE_SEQUENCES
+            if severity == "strong"
+            else MEDIUM_CHALLENGE_SEQUENCES
+        )
+        challenge_pool = challenge_pool or [(challenge,) for challenge in CHALLENGE_TYPES]
         challenge_steps = tuple(random.choice(challenge_pool))
         self.active_challenge = ActiveChallengeV4(challenge_steps, candidate, live, reason)
         self.last_challenge_student_id = candidate.get("student_id")
         logger.info(
-            f"Detect V4 challenge started: {' -> '.join(challenge_steps)} "
+            f"Detect V4 {severity} challenge started: {' -> '.join(challenge_steps)} "
             f"for {candidate.get('student_id')}: {reason}"
         )
         return {
@@ -673,6 +692,21 @@ class DetectV4RuntimeSession:
         baseline_pitch = float(challenge.pitch_baseline or 0.0)
         baseline_mouth = float(challenge.mouth_baseline or 0.0)
         baseline_scale = float(challenge.scale_baseline or 0.0)
+        neutral_yaw = float(
+            challenge.neutral_yaw_baseline
+            if challenge.neutral_yaw_baseline is not None
+            else baseline_yaw
+        )
+        neutral_pitch = float(
+            challenge.neutral_pitch_baseline
+            if challenge.neutral_pitch_baseline is not None
+            else baseline_pitch
+        )
+        neutral_scale = float(
+            challenge.neutral_scale_baseline
+            if challenge.neutral_scale_baseline is not None
+            else baseline_scale
+        )
 
         pitch_value = float(challenge_metrics.get("pitch_value", 0.0))
         mouth_ratio = float(challenge_metrics.get("mouth_ratio", 0.0))
@@ -681,29 +715,30 @@ class DetectV4RuntimeSession:
         dx = nose_x_disp - baseline_yaw
         pitch_delta = pitch_value - baseline_pitch
         mouth_delta = max(0.0, mouth_ratio - baseline_mouth)
-        scale_delta = 0.0
-        if baseline_scale > 1e-6:
-            scale_delta = abs((face_scale - baseline_scale) / baseline_scale)
+        neutral_scale_delta = 0.0
+        if neutral_scale > 1e-6:
+            neutral_scale_delta = abs((face_scale - neutral_scale) / neutral_scale)
 
         action = challenge.current_internal_type
         yaw_ok = abs(yaw_angle) >= CHALLENGE_MIN_YAW_ANGLE
+        pitch_centered = abs(nose_x_disp - neutral_yaw) <= LOOK_PITCH_CENTER_YAW_THRESHOLD
         valid = False
         if action == "TURN_LEFT":
             valid = dx >= TURN_THRESHOLD and yaw_ok
         elif action == "TURN_RIGHT":
             valid = dx <= -TURN_THRESHOLD and yaw_ok
         elif action == "LOOK_UP":
-            valid = pitch_delta <= -LOOK_UP_THRESHOLD
+            valid = pitch_delta <= -LOOK_UP_THRESHOLD and pitch_centered
         elif action == "LOOK_DOWN":
-            valid = pitch_delta >= LOOK_DOWN_THRESHOLD
+            valid = pitch_delta >= LOOK_DOWN_THRESHOLD and pitch_centered
         elif action == "OPEN_MOUTH":
             valid = mouth_delta >= OPEN_MOUTH_DELTA or mouth_ratio >= OPEN_MOUTH_MIN_RATIO
         elif action == "CENTER_HOLD":
             valid = (
-                abs(nose_x_disp - baseline_yaw) <= CENTER_YAW_THRESHOLD
-                and abs(pitch_delta) <= CENTER_PITCH_THRESHOLD
+                abs(nose_x_disp - neutral_yaw) <= CENTER_YAW_THRESHOLD
+                and abs(pitch_value - neutral_pitch) <= CENTER_PITCH_THRESHOLD
                 and abs(yaw_angle) <= CHALLENGE_CENTER_MAX_YAW_ANGLE
-                and scale_delta <= CENTER_SCALE_DELTA
+                and neutral_scale_delta <= CENTER_SCALE_DELTA
             )
 
         if valid:

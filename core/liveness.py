@@ -421,7 +421,6 @@ class MultiFrameLiveness:
         blink_score = min(1.0, track.blink_count / 1.0)
         move_score = min(1.0, movement / max(config.DETECT_V3_STREAM_MOVEMENT_THRESHOLD * 3, 1e-6))
         score = round(float(blink_score * 0.85 + move_score * 0.15), 3)
-        min_required_movement = max(config.DETECT_V3_STREAM_MOVEMENT_THRESHOLD * 0.2, 0.35)
 
         if track.lighting_cooldown > 0:
             return LivenessStatus(None, score, "lighting_unstable", track.blink_count, track.last_ear, movement, track_time)
@@ -430,8 +429,6 @@ class MultiFrameLiveness:
             or track.frame_count < config.DETECT_V3_STREAM_LIVE_MIN_FRAMES
         ):
             return LivenessStatus(None, score, "checking", track.blink_count, track.last_ear, movement, track_time)
-        if track.blink_count > 0 and movement < min_required_movement:
-            return LivenessStatus(None, score, "movement_required", track.blink_count, track.last_ear, movement, track_time)
         if track.blink_count > 0:
             return LivenessStatus(True, score, "pass", track.blink_count, track.last_ear, movement, track_time)
         if track_time < config.DETECT_V3_STREAM_MIN_TRACK_SECONDS:

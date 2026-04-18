@@ -61,6 +61,7 @@ CHALLENGE_CENTER_MAX_YAW_ANGLE = 8.0
 TURN_THRESHOLD = 0.10
 LOOK_UP_THRESHOLD = 0.08
 LOOK_DOWN_THRESHOLD = 0.08
+LOOK_PITCH_CENTER_YAW_THRESHOLD = 0.06
 OPEN_MOUTH_DELTA = 0.12
 OPEN_MOUTH_MIN_RATIO = 0.22
 CENTER_YAW_THRESHOLD = 0.05
@@ -1139,6 +1140,58 @@ def collect_suspicious_reasons(
     if challenge_fail_count >= 2:
         reasons.append("recent challenge failures")
     return reasons
+
+
+def assess_challenge_need(
+    *,
+    moire_decision: str,
+    screen_context: dict[str, Any],
+    phone_rect: dict[str, Any],
+    phone_rect_rolling: dict[str, Any],
+    passive_status: str,
+    passive_score: float,
+    challenge_fail_count: int,
+) -> dict[str, Any]:
+    suspicious_reasons = []
+    strong_reasons = []
+
+    if moire_decision == "suspicious":
+        suspicious_reasons.append("moire suspicious")
+
+    screen_decision = screen_context.get("decision")
+    if screen_decision == "strong":
+        strong_reasons.append("context strong")
+    elif screen_decision == "suspicious":
+        suspicious_reasons.append("context suspicious")
+
+    phone_decision = phone_rect.get("decision")
+    if phone_decision == "strong":
+        strong_reasons.append("phone rectangle strong")
+    elif phone_decision == "suspicious":
+        suspicious_reasons.append("phone rectangle suspicious")
+
+    if phone_rect_rolling.get("decision") == "suspicious":
+        suspicious_reasons.append("phone rectangle rolling")
+
+    if passive_status == "suspicious":
+        suspicious_reasons.append(f"passive {passive_score:.2f}")
+
+    if challenge_fail_count >= 2:
+        strong_reasons.append("recent challenge failures")
+
+    severity = "none"
+    if strong_reasons:
+        severity = "strong"
+    elif len(suspicious_reasons) >= 2:
+        severity = "medium"
+
+    return {
+        "should_challenge": severity != "none",
+        "severity": severity,
+        "reasons": strong_reasons + suspicious_reasons,
+        "strong_reasons": strong_reasons,
+        "suspicious_reasons": suspicious_reasons,
+    }
 
 
 class DetectV4Service:

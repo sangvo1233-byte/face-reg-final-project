@@ -73,6 +73,47 @@ def test_collect_suspicious_reasons():
     assert "recent challenge failures" in reasons
 
 
+def test_assess_challenge_need_requires_two_suspicious_or_one_strong():
+    from core.detect_v4 import assess_challenge_need
+
+    none = assess_challenge_need(
+        moire_decision="suspicious",
+        screen_context={"decision": "clean"},
+        phone_rect={"decision": "clean"},
+        phone_rect_rolling={"decision": "clean"},
+        passive_status="pass",
+        passive_score=0.55,
+        challenge_fail_count=0,
+    )
+    assert none["should_challenge"] is False
+    assert none["severity"] == "none"
+
+    medium = assess_challenge_need(
+        moire_decision="suspicious",
+        screen_context={"decision": "suspicious"},
+        phone_rect={"decision": "clean"},
+        phone_rect_rolling={"decision": "clean"},
+        passive_status="pass",
+        passive_score=0.55,
+        challenge_fail_count=0,
+    )
+    assert medium["should_challenge"] is True
+    assert medium["severity"] == "medium"
+
+    strong = assess_challenge_need(
+        moire_decision="clean",
+        screen_context={"decision": "strong"},
+        phone_rect={"decision": "clean"},
+        phone_rect_rolling={"decision": "clean"},
+        passive_status="pass",
+        passive_score=0.55,
+        challenge_fail_count=0,
+    )
+    assert strong["should_challenge"] is True
+    assert strong["severity"] == "strong"
+    assert "context strong" in strong["reasons"]
+
+
 def test_runtime_diagnostics_expose_overlay_geometry():
     from core.runtime_v4 import DetectV4RuntimeSession
 
@@ -132,7 +173,30 @@ def test_liveness_ignores_brightness_flicker_as_fake_blink():
     assert track.blink_count == 0
 
 
-def test_liveness_requires_motion_before_pass():
+def test_liveness_counts_blink_with_shorter_closed_open_windows():
+    from core.liveness import MultiFrameLiveness
+
+    landmarks = [SimpleNamespace(x=0.5, y=0.5) for _ in range(388)]
+    landmarks[1] = SimpleNamespace(x=0.5, y=0.5)
+
+    tracker = MultiFrameLiveness.__new__(MultiFrameLiveness)
+    tracker._landmarker = MagicMock()
+    tracker._landmarker.detect_for_video.return_value = MagicMock(face_landmarks=[landmarks])
+    tracker._available = True
+    tracker._tracks = {}
+    tracker._next_id = 0
+    tracker._frame_ts = 0
+    tracker._calc_ear = MagicMock(side_effect=[0.30, 0.30, 0.20, 0.20, 0.30, 0.30, 0.30, 0.30])
+
+    frame = np.full((120, 120, 3), 120, dtype=np.uint8)
+    for _ in range(4):
+        tracker.process_frame(frame)
+
+    track = next(iter(tracker._tracks.values()))
+    assert track.blink_count == 1
+
+
+def test_liveness_no_longer_requires_motion_after_blink():
     import config
     from core.liveness import MultiFrameLiveness, _FaceTrack
 
@@ -147,8 +211,8 @@ def test_liveness_requires_motion_before_pass():
 
     status = tracker._status(track)
 
-    assert status.is_live is None
-    assert status.reason == "movement_required"
+    assert status.is_live is True
+    assert status.reason == "pass"
 
 
 def test_liveness_exposes_challenge_metrics_from_landmarks():
@@ -188,7 +252,7 @@ def test_liveness_exposes_challenge_metrics_from_landmarks():
     assert metrics["face_scale"] > 0.0
 
 
-def test_v4_challenge_defaults_to_mixed_action_sequences():
+def test_v4_challenge_uses_medium_pool_for_medium_severity():
     from core.runtime_v4 import DetectV4RuntimeSession
 
     runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
@@ -202,6 +266,7 @@ def test_v4_challenge_defaults_to_mixed_action_sequences():
             {"blinks": 0},
             {"frame_size": {"width": 640, "height": 480}},
             "moire suspicious",
+            "medium",
         )
 
     assert runtime.active_challenge.type == "turn_left"
@@ -212,12 +277,31 @@ def test_v4_challenge_defaults_to_mixed_action_sequences():
     assert "sequence" not in result["challenge"]
     assert mock_choice.call_args.args[0] == [
         ("TURN_LEFT", "OPEN_MOUTH"),
-        ("TURN_RIGHT", "LOOK_UP"),
-        ("LOOK_DOWN", "TURN_LEFT"),
-        ("LOOK_UP", "OPEN_MOUTH"),
-        ("CENTER_HOLD", "TURN_RIGHT"),
-        ("LOOK_DOWN", "OPEN_MOUTH"),
+        ("TURN_RIGHT", "OPEN_MOUTH"),
+        ("LOOK_UP", "TURN_LEFT"),
+        ("LOOK_UP", "TURN_RIGHT"),
     ]
+
+
+def test_v4_challenge_uses_strong_pool_for_strong_severity():
+    from core.runtime_v4 import DetectV4RuntimeSession
+
+    runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
+    runtime.active_challenge = None
+    runtime.last_challenge_student_id = None
+    runtime.frame_timestamps = deque(maxlen=60)
+
+    with patch("core.runtime_v4.random.choice", return_value=("CENTER_HOLD", "TURN_RIGHT")) as mock_choice:
+        runtime._start_challenge(
+            {"student_id": "HS001", "name": "Sample"},
+            {"blinks": 0},
+            {"frame_size": {"width": 640, "height": 480}},
+            "context strong",
+            "strong",
+        )
+
+    assert ("CENTER_HOLD", "TURN_RIGHT") in mock_choice.call_args.args[0]
+    assert ("LOOK_DOWN", "OPEN_MOUTH") in mock_choice.call_args.args[0]
 
 
 def test_v4_challenge_requires_recentering_before_second_step():
@@ -275,7 +359,7 @@ def test_v4_turn_challenge_requires_yaw_and_consecutive_hold():
     assert runtime._check_action(challenge, 0.11, detect_v4.CHALLENGE_MIN_YAW_ANGLE + 2, metrics) is True
 
 
-def test_v4_look_up_requires_negative_pitch_delta():
+def test_v4_look_up_requires_negative_pitch_delta_and_centered_yaw():
     import core.detect_v4 as detect_v4
     from core.runtime_v4 import ActiveChallengeV4, DetectV4RuntimeSession
 
@@ -285,6 +369,7 @@ def test_v4_look_up_requires_negative_pitch_delta():
     challenge.pitch_baseline = 0.50
     challenge.mouth_baseline = 0.08
     challenge.scale_baseline = 100.0
+    challenge.neutral_yaw_baseline = 0.0
     challenge.pose_baseline_frames = detect_v4.CHALLENGE_BASELINE_FRAMES
 
     metrics = {
@@ -297,6 +382,7 @@ def test_v4_look_up_requires_negative_pitch_delta():
     assert runtime._check_action(challenge, 0.0, 2.0, metrics) is False
     assert runtime._check_action(challenge, 0.0, 2.0, metrics) is False
     assert runtime._check_action(challenge, 0.0, 2.0, metrics) is True
+    assert runtime._check_action(challenge, 0.09, 2.0, metrics) is False
 
 
 def test_v4_open_mouth_requires_mouth_delta_and_hold():
@@ -331,6 +417,42 @@ def test_v4_open_mouth_requires_mouth_delta_and_hold():
     assert runtime._check_action(challenge, 0.0, 1.0, strong_metrics) is False
     assert runtime._check_action(challenge, 0.0, 1.0, strong_metrics) is False
     assert runtime._check_action(challenge, 0.0, 1.0, strong_metrics) is True
+
+
+def test_v4_center_hold_uses_neutral_baseline_not_step_baseline():
+    import core.detect_v4 as detect_v4
+    from core.runtime_v4 import ActiveChallengeV4, DetectV4RuntimeSession
+
+    runtime = DetectV4RuntimeSession.__new__(DetectV4RuntimeSession)
+    challenge = ActiveChallengeV4(("CENTER_HOLD",), {"student_id": "HS001"}, {"blinks": 0}, "test")
+    challenge.pose_baseline = 0.09
+    challenge.pitch_baseline = 0.58
+    challenge.mouth_baseline = 0.08
+    challenge.scale_baseline = 100.0
+    challenge.neutral_yaw_baseline = 0.0
+    challenge.neutral_pitch_baseline = 0.50
+    challenge.neutral_scale_baseline = 100.0
+    challenge.pose_baseline_frames = detect_v4.CHALLENGE_BASELINE_FRAMES
+
+    off_center_metrics = {
+        "available": True,
+        "lighting_cooldown": 0,
+        "pitch_value": 0.58,
+        "mouth_ratio": 0.08,
+        "face_scale": 100.0,
+    }
+    centered_metrics = {
+        "available": True,
+        "lighting_cooldown": 0,
+        "pitch_value": 0.50,
+        "mouth_ratio": 0.08,
+        "face_scale": 100.0,
+    }
+
+    assert runtime._check_action(challenge, 0.09, 1.0, off_center_metrics) is False
+    assert runtime._check_action(challenge, 0.0, 1.0, centered_metrics) is False
+    assert runtime._check_action(challenge, 0.0, 1.0, centered_metrics) is False
+    assert runtime._check_action(challenge, 0.0, 1.0, centered_metrics) is True
 
 
 def test_system_capabilities_include_v4():
