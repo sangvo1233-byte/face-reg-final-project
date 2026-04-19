@@ -40,7 +40,7 @@ The `/phone` page and `/ws/phone-camera` transport are still available, but they
 - InsightFace face detection and 512-d ArcFace embeddings
 - multi-angle V2 enrollment with per-angle validation
 - Detect V4.4 backend-owned scan runtime shared by browser stream and local-direct modes
-- `random active challenge fallback` with `TURN_LEFT`, `TURN_RIGHT`, `LOOK_UP`, `LOOK_DOWN`, `OPEN_MOUTH`, and `CENTER_HOLD`
+- active challenge fallback supporting `TURN_LEFT`, `TURN_RIGHT`, `LOOK_UP`, `LOOK_DOWN`, `OPEN_MOUTH`, and `CENTER_HOLD`
 - attendance success overlay and in-camera challenge overlay
 - debug "Tech Overlay" for runtime geometry and diagnostics
 - student archive/restore flow with photo and evidence endpoints
@@ -180,21 +180,20 @@ face-reg-finnal-project/
 The table below clarifies which paths are tracked in Git and which are local-only runtime data.
 
 | Path | Tracked in Git | Notes |
-|---|:---:|---|
-| `app/`, `core/`, `web/`, `tests/` | ✅ | Application source code |
-| `main.py`, `config.py`, `requirements.txt` | ✅ | Entry point and config |
-| `dev/` | ✅ | Research scripts and iteration history (intentional artifact) |
-| `.env.example` | ✅ | Env var documentation — safe to commit |
-| `pytest.ini`, `.gitignore`, `.gitattributes` | ✅ | Repo tooling |
-| `start_tunnel.bat` | ✅ | Dev convenience script |
-| `models/` | ❌ | Downloaded model files — too large for Git |
-| `database/` | ❌ | SQLite DB and backups — local runtime data |
-| `logs/` | ❌ | Evidence images, face crops, and log files |
-| `.env` | ❌ | Real environment variables — never commit |
-| `tunnel_log*.txt` | ❌ | Cloudflared output |
+|---|---|---|
+| `app/`, `core/`, `web/`, `tests/` | Yes | Application source code |
+| `main.py`, `config.py`, `requirements.txt` | Yes | Entry point and config |
+| `dev/` | Yes | Research scripts and iteration history |
+| `.env.example` | Yes | Environment variable reference with no secrets |
+| `pytest.ini`, `.gitignore`, `.gitattributes` | Yes | Repo tooling |
+| `start_tunnel.bat` | Yes | Development convenience script |
+| `models/` | No | Downloaded model files; too large for Git |
+| `database/` | No | SQLite database and backups; local runtime data |
+| `logs/` | No | Evidence images, face crops, and runtime logs |
+| `.env` | No | Real environment variables; never commit |
+| `tunnel_log*.txt` | No | Cloudflared output |
 
-> [!NOTE]
-> **Git safety**: `.gitignore` reduces the chance of accidentally committing local data, but it is not a security boundary. Sensitive values should be managed through environment variables or a secrets manager, not committed files.
+Git safety: `.gitignore` reduces the chance of accidentally committing local data, but it is not a security boundary. Sensitive values should be managed through environment variables or a secrets manager, not committed files.
 
 ---
 
@@ -414,28 +413,31 @@ If you change V4 behavior, update both the code and this README so the documente
 
 ## Testing
 
-### Default suite (stable, no external dependencies)
+### Stable automated tests
 
-Run from repo root — does not require a camera, database, or files outside the repo:
+These tests do not require a camera or files outside the repository:
+
+```bash
+python -m pytest tests/test_detect_v4.py tests/test_v2_v3.py -q
+```
+
+### Full repository test command
 
 ```bash
 python -m pytest -q
 ```
 
-Run specific test files:
-
-```bash
-python -m pytest tests/test_detect_v4.py -q
-python -m pytest tests/test_v2_v3.py -q
-```
-
-### Integration test (manual, opt-in)
+This command also discovers `tests/test_core.py`.
 
 `tests/test_core.py` is an integration test that depends on:
-- An external video directory at `C:\Users\ADMIN\Desktop\Projects\face-attendance\test_video\`
-- A live database and `logs/` directory (writes real runtime data)
+- an external video directory at `C:\Users\ADMIN\Desktop\Projects\face-attendance\test_video\`
+- a live database and `logs/` directory, which means it writes real runtime data
 
-It is skipped automatically in the default suite. Run manually when all dependencies are present:
+Behavior of `tests/test_core.py`:
+- if the external video directory does not exist, the test skips itself
+- if the directory exists, the test runs and writes to local runtime data
+
+Run that integration test explicitly when you want to validate the end-to-end flow:
 
 ```bash
 python -m pytest tests/test_core.py -m integration -s
@@ -480,5 +482,4 @@ node --check web/js/enrollment.js
 
 For implementation details behind Detect V4.4, see the research report in `dev/detect-v4.4.py` and the inline architecture comments in `core/detect_v4.py` and `core/runtime_v4.py`.
 
-> [!NOTE]
-> The `dev/` directory and its scripts are intentional artifacts documenting the V1 → V4.4 research progression. They are tracked in Git and are not junk files.
+The `dev/` directory and its scripts are intentional artifacts documenting the V1 to V4.4 research progression. They are tracked in Git and are not junk files.
