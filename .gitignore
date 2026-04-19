@@ -1,10 +1,10 @@
-# Unrelated folders in project directory
+# ── Unrelated local folders ─────────────────────────────────
 Computer Vision Share/
 
-# Pre-trained model files (too large for GitHub — download separately)
+# ── Pre-trained model files (too large for GitHub) ──────────
 models/
 
-# Python
+# ── Python ──────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -15,51 +15,77 @@ dist/
 build/
 *.egg
 
-# Virtual envs
-.env
+# ── Virtual environments ─────────────────────────────────────
 .venv
 venv/
 env/
 
-# Database (local data — không commit)
+# ── Environment / secrets ────────────────────────────────────
+# .env.example is intentionally committed; real env files are not.
+.env
+.env.*
+!.env.example
+
+# ── Certificates & private keys ─────────────────────────────
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# ── Database (local runtime data — do not commit) ────────────
 database/*.db
 database/*.db-shm
 database/*.db-wal
+database/*.db-journal
+database/*.sqlite
+database/*.sqlite3
 database/backups/
 
-# Logs & runtime artifacts
+# ── Logs & runtime artifacts ─────────────────────────────────
 logs/evidence/
 logs/face_crops/
 logs/evidence_archived_*/
 logs/*.log
 *.log
 
-# Tunnel
+# ── Tunnel ───────────────────────────────────────────────────
 tunnel_log*.txt
 
-# Web demo video (lớn, share qua drive)
+# ── Web demo video (large — share via Drive) ─────────────────
 web/demo.mp4
 
-# OS
+# ── OS ───────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# IDE
+# ── IDE ──────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.sublime-project
 *.sublime-workspace
 
-# Jupyter
+# ── Jupyter ──────────────────────────────────────────────────
 .ipynb_checkpoints/
 
-# Cloudflared
+# ── Cloudflared ──────────────────────────────────────────────
 *.bat.log
 
-# Pytest temp cache
+# ── Pytest & coverage ────────────────────────────────────────
 pytest-cache-files-*/
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 
-# Test result artifacts
+# ── Test result artifacts ────────────────────────────────────
 tests/test_result.txt
+
+# ── Temp directories ─────────────────────────────────────────
+tmp/
+temp/

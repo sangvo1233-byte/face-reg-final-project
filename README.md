@@ -40,7 +40,7 @@ The `/phone` page and `/ws/phone-camera` transport are still available, but they
 - InsightFace face detection and 512-d ArcFace embeddings
 - multi-angle V2 enrollment with per-angle validation
 - Detect V4.4 backend-owned scan runtime shared by browser stream and local-direct modes
-- random active challenge fallback with `blink`, `turn_left`, and `turn_right`
+- `random active challenge fallback` with `TURN_LEFT`, `TURN_RIGHT`, `LOOK_UP`, `LOOK_DOWN`, `OPEN_MOUTH`, and `CENTER_HOLD`
 - attendance success overlay and in-camera challenge overlay
 - debug "Tech Overlay" for runtime geometry and diagnostics
 - student archive/restore flow with photo and evidence endpoints
@@ -76,9 +76,14 @@ Browser camera or server webcam frame
 
 V4.4 only starts a challenge after a matched identity looks suspicious. Current challenge types:
 
-- `blink`
-- `turn_left`
-- `turn_right`
+| Challenge | Description |
+|---|---|
+| `TURN_LEFT` | Turn face to the left |
+| `TURN_RIGHT` | Turn face to the right |
+| `LOOK_UP` | Tilt face upward |
+| `LOOK_DOWN` | Tilt face downward |
+| `OPEN_MOUTH` | Open mouth visibly |
+| `CENTER_HOLD` | Hold face centered and still |
 
 Current challenge state is in-memory and process-local.
 
@@ -169,6 +174,29 @@ face-reg-finnal-project/
 |-- database/
 |-- logs/
 ```
+
+## Repository Map
+
+The table below clarifies which paths are tracked in Git and which are local-only runtime data.
+
+| Path | Tracked in Git | Notes |
+|---|:---:|---|
+| `app/`, `core/`, `web/`, `tests/` | ✅ | Application source code |
+| `main.py`, `config.py`, `requirements.txt` | ✅ | Entry point and config |
+| `dev/` | ✅ | Research scripts and iteration history (intentional artifact) |
+| `.env.example` | ✅ | Env var documentation — safe to commit |
+| `pytest.ini`, `.gitignore`, `.gitattributes` | ✅ | Repo tooling |
+| `start_tunnel.bat` | ✅ | Dev convenience script |
+| `models/` | ❌ | Downloaded model files — too large for Git |
+| `database/` | ❌ | SQLite DB and backups — local runtime data |
+| `logs/` | ❌ | Evidence images, face crops, and log files |
+| `.env` | ❌ | Real environment variables — never commit |
+| `tunnel_log*.txt` | ❌ | Cloudflared output |
+
+> [!NOTE]
+> **Git safety**: `.gitignore` reduces the chance of accidentally committing local data, but it is not a security boundary. Sensitive values should be managed through environment variables or a secrets manager, not committed files.
+
+---
 
 Runtime data is stored in:
 
@@ -386,31 +414,42 @@ If you change V4 behavior, update both the code and this README so the documente
 
 ## Testing
 
-Run focused Detect V4.4 tests:
+### Default suite (stable, no external dependencies)
+
+Run from repo root — does not require a camera, database, or files outside the repo:
+
+```bash
+python -m pytest -q
+```
+
+Run specific test files:
 
 ```bash
 python -m pytest tests/test_detect_v4.py -q
-```
-
-Run V2/V3 tests:
-
-```bash
 python -m pytest tests/test_v2_v3.py -q
 ```
 
-Run the full test suite:
+### Integration test (manual, opt-in)
+
+`tests/test_core.py` is an integration test that depends on:
+- An external video directory at `C:\Users\ADMIN\Desktop\Projects\face-attendance\test_video\`
+- A live database and `logs/` directory (writes real runtime data)
+
+It is skipped automatically in the default suite. Run manually when all dependencies are present:
 
 ```bash
-python -m pytest tests -q
+python -m pytest tests/test_core.py -m integration -s
 ```
 
-Run the legacy smoke runner that writes to `tests/test_result.txt`:
+### Legacy smoke runner
+
+Writes a result log to `tests/test_result.txt` (ignored by `.gitignore`):
 
 ```bash
 python tests/run_test.py
 ```
 
-Optional frontend syntax check if Node.js is available:
+### Optional frontend syntax check (requires Node.js)
 
 ```bash
 node --check web/js/main.js
@@ -439,7 +478,7 @@ node --check web/js/enrollment.js
 - V3 and V4 coexist in the codebase, so route coverage is broader than the default UI path
 - runtime data under `database/`, `logs/`, and `models/` can grow quickly during testing
 
-For implementation details behind Detect V4.4, see:
+For implementation details behind Detect V4.4, see the research report in `dev/detect-v4.4.py` and the inline architecture comments in `core/detect_v4.py` and `core/runtime_v4.py`.
 
-- `REPORT_DETECT_V4_4_VI.md`
-- `REPORT_DETECT_V4_4_VI.pdf`
+> [!NOTE]
+> The `dev/` directory and its scripts are intentional artifacts documenting the V1 → V4.4 research progression. They are tracked in Git and are not junk files.

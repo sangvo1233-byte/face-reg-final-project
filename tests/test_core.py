@@ -1,12 +1,20 @@
 """
-Test Script — Diem Danh Hoc Sinh
+Integration test — Diem Danh Hoc Sinh (Full Pipeline)
 
-Su dung test video tu face-attendance de:
-1. Enroll hoc sinh (trich frame tu video 1)
-2. Tao phien diem danh
-3. Quet cac video khac de diem danh
-4. In ket qua
+Phu thuoc:
+  - Video ngoai repo: C:\\Users\\ADMIN\\Desktop\\Projects\\face-attendance\\test_video\\
+  - DB va logs runtime that su (ghi vao database/ va logs/)
+
+Chay thu cong (khi co du file):
+  pytest tests/test_core.py -m integration -s
+
+Suite mac dinh (pytest -q) se tu dong skip neu khong tim thay thu muc video.
 """
+import pytest
+
+# Mark toan bo file nay la integration-only.
+# De chay: pytest -m integration
+pytestmark = pytest.mark.integration
 import sys
 import os
 import cv2
@@ -21,6 +29,7 @@ from core.face_engine import get_engine
 from core.database import get_db
 
 # Path to test videos (from face-attendance project)
+# This directory lives outside the repo and is NOT included in version control.
 FACE_ATTENDANCE_DIR = Path(r"C:\Users\ADMIN\Desktop\Projects\face-attendance")
 TEST_VIDEO_DIR = FACE_ATTENDANCE_DIR / "test_video"
 
@@ -81,7 +90,15 @@ class _Tee:
 
 
 def test_full_pipeline():
-    """Test toan bo pipeline: enroll -> session -> scan -> result."""
+    """Test toan bo pipeline: enroll -> session -> scan -> result.
+
+    Integration test: chi chay khi TEST_VIDEO_DIR ton tai tren disk.
+    """
+    if not TEST_VIDEO_DIR.exists():
+        pytest.skip(
+            f"Integration test skipped: test video dir not found at {TEST_VIDEO_DIR}. "
+            "Run with: pytest tests/test_core.py -m integration -s"
+        )
     import builtins
     result_file = open(str(Path(__file__).resolve().parent / "test_result.txt"), "w", encoding="utf-8")
     _original_print = builtins.print
